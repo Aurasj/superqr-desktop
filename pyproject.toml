@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "superqr-desktop"
+version = "1.0.0"
+description = "Standalone V6 SuperQR Desktop"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pygame-ce>=2.4.0",
+]
+
+[project.scripts]
+superqr-desktop = "superqr_desktop.app:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
