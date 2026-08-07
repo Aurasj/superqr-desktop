@@ -23,3 +23,9 @@ wheels/
 env/
 venv/
 ENV/
+
+# Caches and test outputs
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
