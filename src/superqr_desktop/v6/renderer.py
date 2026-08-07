@@ -84,3 +84,27 @@ class V6Renderer:
                 idx += 1
                 bbox = [x0 + c * csize, y0 + r * csize, x0 + (c + 1) * csize, y0 + (r + 1) * csize]
                 pygame.draw.rect(self.surface, color, self._rect(bbox))
+
+    def draw_grid_indexes(self, indexes: list[int]):
+        grid = self.contract["data_grid"]
+        cols, rows = grid["cols"], grid["rows"]
+        csize = grid["cell_size"]
+        x0, y0 = grid["bbox"][0], grid["bbox"][1]
+        
+        color_lookup = [
+            self.palette["BLACK"],
+            self.palette["WHITE"],
+            self.palette["RED"],
+            self.palette["BLUE"]
+        ]
+        
+        idx = 0
+        for r in range(rows):
+            for c in range(cols):
+                if idx < len(indexes):
+                    color = color_lookup[indexes[idx]]
+                else:
+                    color = color_lookup[0]
+                idx += 1
+                bbox = [x0 + c * csize, y0 + r * csize, x0 + (c + 1) * csize, y0 + (r + 1) * csize]
+                pygame.draw.rect(self.surface, color, self._rect(bbox))

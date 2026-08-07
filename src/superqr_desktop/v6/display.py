@@ -93,16 +93,7 @@ class DisplayController:
         self.renderer = V6Renderer(self.contract, CANONICAL_SIZE)
         return metrics
 
-    def render(self, mode: str):
-        if not self.screen or not self.renderer:
-            return
-
-        # Canonical rendering at 1000x1000
-        self.renderer.draw_static_features()
-        self.renderer.draw_grid(mode)
-
-        self.screen.fill((255, 255, 255))
-
+    def _blit_renderer(self):
         canvas_w, canvas_h = self.screen.get_size()
 
         # Crisp pixel-preserving scaling (nearest-neighbor via pygame.transform.scale)
@@ -119,3 +110,23 @@ class DisplayController:
 
         self.screen.blit(scaled_surface, (cx, cy))
         pygame.display.flip()
+
+    def render(self, mode: str):
+        if not self.screen or not self.renderer:
+            return
+
+        # Canonical rendering at 1000x1000
+        self.renderer.draw_static_features()
+        self.renderer.draw_grid(mode)
+        self.screen.fill((255, 255, 255))
+        self._blit_renderer()
+
+    def render_indexes(self, indexes: list[int]):
+        if not self.screen or not self.renderer:
+            return
+
+        # Canonical rendering at 1000x1000
+        self.renderer.draw_static_features()
+        self.renderer.draw_grid_indexes(indexes)
+        self.screen.fill((255, 255, 255))
+        self._blit_renderer()
