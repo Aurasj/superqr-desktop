@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "superqr-desktop"
 version = "1.0.0"
-description = "Standalone V6 SuperQR Desktop"
+description = "SuperQR Desktop — screen-to-camera data transfer"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -25,6 +25,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "superqr_desktop.contract" = ["visual_contract.json"]
+"superqr_desktop.v7_capacity_lab.data" = ["*.json"]
 
 
 [tool.pytest.ini_options]

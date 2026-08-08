@@ -22,8 +22,12 @@ from superqr_desktop.v7_capacity_lab import protocol_bridge
 class TestProtocolBridge:
     def test_resolves_protocol_root(self):
         root = protocol_bridge.get_protocol_root()
-        assert root.is_dir()
-        assert (root / "protocol" / "v7_capacity_lab").is_dir()
+        if root is not None:
+            assert root.is_dir()
+            assert (root / "protocol" / "v7_capacity_lab").is_dir()
+        else:
+            # No sibling protocol repo — normal in CI, uses packaged data
+            pass
 
     def test_loads_reference_vectors(self):
         vectors = protocol_bridge.load_reference_vectors()
@@ -196,15 +200,42 @@ class TestCanonicalProfileResolution:
         canonical = find_canonical_reference_profile(80, "candidate_8_a", 7)
         assert canonical is None
 
-    def test_validate_or_fail_with_lab_named_profile_passes(self, monkeypatch):
-        """A 'lab_*' profile matching canonical (grid, palette, seed)
-        should resolve to the ref_* profile and pass validation."""
-        from superqr_desktop.v7_capacity_lab.cross_validate import validate_or_fail
+    def test_validate_or_fail_raises_on_non_reference_seed(self):
+        """A non-reference seed must raise CrossValidationError."""
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            validate_or_fail, CrossValidationError,
+        )
         from superqr_desktop.v7_capacity_lab.protocol_bridge import (
             get_protocol_profiles, get_protocol_model,
         )
 
-        # Build a user profile with a "lab_*" style name
+        profiles_mod = get_protocol_profiles()
+        model_mod = get_protocol_model()
+        CalibrationConfig = model_mod.CalibrationConfig
+
+        profile = profiles_mod.build_profile(
+            name="lab_40x40_v6_reference_4_seed99",
+            grid_size=40,
+            palette_name="v6_reference_4",
+            layout_name="single",
+            seed=99,
+            dwell_epochs=2,
+            calibration=CalibrationConfig(solid_frames=True),
+        )
+
+        with pytest.raises(CrossValidationError):
+            validate_or_fail(profile)
+
+    def test_validate_or_fail_with_lab_named_profile_passes(self):
+        """A 'lab_*' profile matching canonical (grid, palette, seed)
+        should resolve to the ref_* profile and pass validation."""
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            validate_or_fail, CrossValidationError,
+        )
+        from superqr_desktop.v7_capacity_lab.protocol_bridge import (
+            get_protocol_profiles, get_protocol_model,
+        )
+
         profiles_mod = get_protocol_profiles()
         model_mod = get_protocol_model()
         CalibrationConfig = model_mod.CalibrationConfig
@@ -219,16 +250,11 @@ class TestCanonicalProfileResolution:
             calibration=CalibrationConfig(solid_frames=True),
         )
 
-        # Patch sys.exit so validate_or_fail doesn't kill the test process
-        exit_calls = []
-        monkeypatch.setattr("sys.exit", lambda code=None: exit_calls.append(code) or None)
-
-        # Run — this should not call sys.exit(1)
-        validate_or_fail(profile)
-
-        assert exit_calls != [1], (
-            "validate_or_fail called sys.exit(1) on a config that should pass"
-        )
+        # Should not raise — validation passes
+        try:
+            validate_or_fail(profile)
+        except CrossValidationError as e:
+            pytest.fail(f"validate_or_fail raised CrossValidationError unexpectedly: {e}")
 
     def test_cross_validate_cli_standalone_still_works(self):
         """The standalone cross_validate CLI must still work."""
@@ -295,7 +321,7 @@ class TestLabRenderer:
     def test_palette_rgb_output_exact(self):
         """Render a solid-color matrix and verify exact pixel colors."""
         from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
-        from protocol.v7_capacity_lab.model import SymbolMatrix
+        from superqr_desktop.v7_capacity_lab._local.model import SymbolMatrix
 
         # Create a 2x2 matrix with known symbol indexes: 0, 1, 2, 3
         matrix = SymbolMatrix(
@@ -338,7 +364,7 @@ class TestLabRenderer:
     def test_candidate_8_a_rgb_output(self):
         """Verify candidate_8_a palette colors render correctly."""
         from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
-        from protocol.v7_capacity_lab.model import SymbolMatrix
+        from superqr_desktop.v7_capacity_lab._local.model import SymbolMatrix
 
         # candidate_8_a: 0=BLACK,1=WHITE,2=RED,3=GREEN,4=BLUE,5=YELLOW,6=CYAN,7=MAGENTA
         colors = {
@@ -381,7 +407,7 @@ class TestLabRenderer:
     def test_nearest_neighbor_no_blending(self):
         """Hard cell boundaries: adjacent cells of different colors must not blend."""
         from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
-        from protocol.v7_capacity_lab.model import SymbolMatrix
+        from superqr_desktop.v7_capacity_lab._local.model import SymbolMatrix
 
         # 2x1 matrix: BLACK | WHITE
         symbols = [[0, 1]]
@@ -423,7 +449,7 @@ class TestLabRenderer:
         (carrier areas outside payload are not red).
         """
         from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
-        from protocol.v7_capacity_lab.model import SymbolMatrix
+        from superqr_desktop.v7_capacity_lab._local.model import SymbolMatrix
 
         # 1x1 RED cell (symbol 2 in v6_reference_4)
         symbols = [[2]]
@@ -664,163 +690,226 @@ class TestV6Untouched:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _tk_available() -> bool:
-    """Check whether Tkinter can create a root window in this environment."""
-    try:
-        import tkinter as _tk
-        root = _tk.Tk()
-        root.destroy()
-        return True
-    except Exception:
-        return False
+# ─────────────────────────────────────────────────────────────────────
+# Unified ControlApp integration tests
+# ─────────────────────────────────────────────────────────────────────
 
 
-TK_AVAILABLE = _tk_available()
-TK_SKIP_REASON = "Tkinter Tcl/Tk not available in this environment"
+class TestUnifiedControlApp:
+    @pytest.fixture(autouse=True)
+    def init_pygame(self):
+        pygame.init()
+        yield
+        pygame.quit()
 
+    def test_single_entry_point_exists(self):
+        """superqr-desktop entry point is app.main()."""
+        from superqr_desktop.app import main
+        assert callable(main)
 
-class TestLauncher:
-    def test_launcher_importable(self):
-        """Launcher module imports without side effects."""
-        from superqr_desktop.v7_capacity_lab import lab_launcher
-        assert lab_launcher is not None
+    def test_superqr_desktop_entry_point(self):
+        """pyproject.toml entry point resolves correctly."""
+        import importlib
+        mod = importlib.import_module("superqr_desktop.app")
+        assert hasattr(mod, "main")
+        assert callable(mod.main)
 
-    def test_detect_displays_returns_list(self):
-        """Display detection should work without creating a window."""
-        from superqr_desktop.v7_capacity_lab.lab_launcher import _detect_displays
-        displays = _detect_displays()
-        assert len(displays) >= 1
-        for d in displays:
-            assert "index" in d
-            assert "label" in d
-            assert "width" in d
-            assert "height" in d
-
-    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
-    def test_validation_passes_valid_config(self):
-        """Default settings should validate cleanly."""
-        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
-        launcher = LabLauncher()
+    def test_v6_mode_initializes_correctly(self):
+        """In V6 mode, sender and display controller exist."""
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
         try:
-            errors = launcher._validate()
-            assert errors == [], f"Expected no errors, got: {errors}"
+            assert app.sender is not None
+            assert app.display_controller is not None
+            assert app.engine_var.get() == "V6 Stable"
+            assert "V6 Stable" in app.engine_var.get()
         finally:
-            launcher.root.destroy()
+            app.root.destroy()
 
-    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
-    def test_validation_rejects_bad_grid(self):
-        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
-        launcher = LabLauncher()
+    def test_v7_mode_selection_switches_sections(self):
+        """Switching to V7 Development shows V7 section, hides V6."""
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
         try:
-            launcher._grid_var.set("99")
-            errors = launcher._validate()
-            assert len(errors) >= 1
-            assert any("Grid" in e for e in errors)
+            app.engine_var.set("V7 Development")
+            app._on_engine_changed()
+            # V7 state should be IDLE
+            assert app._v7_state == "IDLE"
+            assert app.engine_var.get() == "V7 Development"
         finally:
-            launcher.root.destroy()
+            app.root.destroy()
 
-    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
-    def test_validation_rejects_zero_seed(self):
-        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
-        launcher = LabLauncher()
+    def test_v6_to_v7_to_v6_switching_clears_state(self):
+        """Switching V6 → V7 → V6 should stop any active transfers."""
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
         try:
-            launcher._seed_var.set("0")
-            errors = launcher._validate()
-            assert len(errors) >= 1
-            assert any("Seed" in e or "seed" in e for e in errors)
+            # Start in V6
+            assert app.engine_var.get() == "V6 Stable"
+            # Switch to V7
+            app.engine_var.set("V7 Development")
+            app._on_engine_changed()
+            assert app._v7_state == "IDLE"
+            # Switch back to V6
+            app.engine_var.set("V6 Stable")
+            app._on_engine_changed()
+            # V6 should still be functional
+            assert app.sender is not None
         finally:
-            launcher.root.destroy()
+            app.root.destroy()
 
-    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
-    def test_validation_rejects_bad_frames(self):
-        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
-        launcher = LabLauncher()
+    def test_v7_prepare_validates_and_renders_40x40(self):
+        """V7 prepare/validate on 40x40 v6_reference_4 should succeed."""
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
         try:
-            launcher._frames_var.set("0")
-            errors = launcher._validate()
-            assert len(errors) >= 1
-            assert any("Frames" in e for e in errors)
-        finally:
-            launcher.root.destroy()
+            app.engine_var.set("V7 Development")
+            app._on_engine_changed()
+            app._v7_grid_var.set("40")
+            app._v7_palette_var.set("v6_reference_4")
+            app._v7_dwell_var.set("2")
+            app._v7_seed_var.set("42")
+            app._v7_layout_var.set("single")
+            app._v7_frames_var.set("10")
+            app._v7_calib_var.set(True)
+            app._v7_prepare()
 
-    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
-    def test_validation_rejects_small_marker(self):
-        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
-        launcher = LabLauncher()
+            assert app._v7_state == "READY"
+            assert app._v7_validation_passed is True
+            assert app._v7_sequence is not None
+            assert app._v7_total_frames > 0
+            assert app._v7_renderer is not None
+            assert app._v7_renderer.cached_frame_display is not None
+        finally:
+            app.root.destroy()
+
+    def test_v7_prepare_96x96_candidate_8_a(self):
+        """V7 prepare/validate on 96x96 candidate_8_a should succeed."""
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
         try:
-            launcher._marker_var.set("50")
-            errors = launcher._validate()
-            assert len(errors) >= 1
-            assert any("Marker" in e for e in errors)
-        finally:
-            launcher.root.destroy()
+            app.engine_var.set("V7 Development")
+            app._on_engine_changed()
+            app._v7_grid_var.set("96")
+            app._v7_palette_var.set("candidate_8_a")
+            app._v7_dwell_var.set("3")
+            app._v7_seed_var.set("42")
+            app._v7_layout_var.set("single")
+            app._v7_frames_var.set("5")
+            app._v7_calib_var.set(False)
+            app._v7_prepare()
 
-    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
-    def test_build_args_produces_namespace(self):
-        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
-        launcher = LabLauncher()
+            assert app._v7_state == "READY"
+            assert app._v7_validation_passed is True
+            assert app._v7_renderer.cached_frame_display is not None
+        finally:
+            app.root.destroy()
+
+    def test_v7_start_stop_lifecycle(self):
+        """V7 experiment should transition through IDLE→READY→RUNNING→STOPPED."""
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
         try:
-            launcher._grid_var.set("80")
-            launcher._palette_var.set("candidate_8_a")
-            launcher._dwell_var.set("3")
-            launcher._seed_var.set("99")
-            launcher._layout_var.set("2x2")
-            launcher._frames_var.set("50")
-            launcher._marker_var.set("800")
-            launcher._calib_var.set(False)
-            launcher._fullscreen_var.set(True)
-            launcher._hud_var.set(True)
+            app.engine_var.set("V7 Development")
+            app._on_engine_changed()
+            app._v7_grid_var.set("40")
+            app._v7_palette_var.set("v6_reference_4")
+            app._v7_prepare()
+            assert app._v7_state == "READY"
 
-            args = launcher._build_args()
-            assert args.grid == 80
-            assert args.palette == "candidate_8_a"
-            assert args.dwell == 3
-            assert args.seed == 99
-            assert args.layout == "2x2"
-            assert args.frames == 50
-            assert args.marker_size == 800
-            assert args.no_calibration is True
-            assert args.fullscreen is True
-            assert args.hud is True
+            app._v7_start()
+            assert app._v7_state == "RUNNING"
+
+            app._v7_stop()
+            assert app._v7_state == "STOPPED"
+
+            app._v7_start()
+            assert app._v7_state == "RUNNING"
         finally:
-            launcher.root.destroy()
+            app.root.destroy()
 
-    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
-    def test_build_args_no_calibration_inverts_calib_var(self):
-        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
-        launcher = LabLauncher()
+    def test_v7_manual_frame_navigation(self):
+        """Prev/Next/Reset should work when stopped."""
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
         try:
-            launcher._calib_var.set(True)
-            args = launcher._build_args()
-            assert args.no_calibration is False
+            app.engine_var.set("V7 Development")
+            app._on_engine_changed()
+            app._v7_grid_var.set("40")
+            app._v7_palette_var.set("v6_reference_4")
+            app._v7_frames_var.set("10")
+            app._v7_prepare()
 
-            launcher._calib_var.set(False)
-            args = launcher._build_args()
-            assert args.no_calibration is True
+            # Navigate forward
+            app._v7_next()
+            assert app._v7_frame_idx == 1
+
+            app._v7_next()
+            assert app._v7_frame_idx == 2
+
+            # Navigate back
+            app._v7_prev()
+            assert app._v7_frame_idx == 1
+
+            # Reset to 0
+            app._v7_reset()
+            assert app._v7_frame_idx == 0
+
+            # Wrap around
+            app._v7_reset()
+            app._v7_prev()
+            assert app._v7_frame_idx == app._v7_total_frames - 1
         finally:
-            launcher.root.destroy()
+            app.root.destroy()
 
-    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
-    def test_get_display_index_matches_labels(self):
-        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
-        launcher = LabLauncher()
+    def test_v7_cross_validation_all_14_profiles(self):
+        """All 14 canonical reference configs should prepare successfully."""
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
         try:
-            labels = [d["label"] for d in launcher.displays]
-            for idx, label in enumerate(labels):
-                launcher._display_var.set(label)
-                assert launcher._get_display_index() == idx
+            app.engine_var.set("V7 Development")
+            app._on_engine_changed()
+
+            grids = [40, 48, 56, 64, 72, 80, 96]
+            palettes = ["v6_reference_4", "candidate_8_a"]
+            for grid in grids:
+                for pal in palettes:
+                    app._v7_grid_var.set(str(grid))
+                    app._v7_palette_var.set(pal)
+                    app._v7_frames_var.set("1")
+                    app._v7_prepare()
+                    assert app._v7_validation_passed is True, (
+                        f"Validation failed for {grid}x{grid} {pal}"
+                    )
+                    assert app._v7_state == "READY"
         finally:
-            launcher.root.destroy()
+            app.root.destroy()
 
-    def test_cli_main_importable(self):
-        """lab_launcher.main() should be importable and callable."""
-        from superqr_desktop.v7_capacity_lab.lab_launcher import main as launcher_main
-        assert callable(launcher_main)
-
-    def test_lab_runner_cli_still_works(self):
-        """The CLI entry point must continue to work after the refactor."""
-        from superqr_desktop.v7_capacity_lab.lab_runner import main as runner_main
+    def test_v7_cli_path_still_works(self):
+        """lab_runner CLI is still callable for headless use."""
+        from superqr_desktop.v7_capacity_lab.lab_runner import (
+            main as runner_main, build_arg_parser, LabRunner,
+        )
         assert callable(runner_main)
+        parser = build_arg_parser()
+        assert parser is not None
+        assert LabRunner is not None
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -850,3 +939,162 @@ class TestIntegration:
             assert len(data_frames) >= 1, f"No data frames for {profile.name}"
             renderer.prepare_logical_frame(data_frames[0].symbol_matrix)
             assert renderer.cached_frame_display is not None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CI self-contained tests — no sibling protocol repo required
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestCISelfContained:
+    """Prove Desktop works when NO sibling superqr-protocol exists."""
+
+    def setup_method(self):
+        import importlib
+        import superqr_desktop.v7_capacity_lab.protocol_bridge as pb
+        # Force cache reset for isolation
+        pb._protocol_root = None
+        pb._protocol_available = None
+        pb._reference_vectors_cache = None
+        pb._v6_contract_cache = None
+
+    def test_packaged_reference_vectors_load(self):
+        """Packaged reference_vectors.json loads via protocol_bridge."""
+        from superqr_desktop.v7_capacity_lab.protocol_bridge import load_reference_vectors
+        vectors = load_reference_vectors()
+        assert "vectors" in vectors
+        assert len(vectors["vectors"]) == 14
+
+    def test_packaged_v6_contract_loads(self):
+        """Packaged V6 visual contract loads via protocol_bridge."""
+        from superqr_desktop.v7_capacity_lab.protocol_bridge import load_v6_visual_contract
+        contract = load_v6_visual_contract()
+        assert contract["contract_version"] == "v6"
+
+    def test_local_modules_work_without_protocol_repo(self, monkeypatch):
+        """Local _local modules serve when protocol repo is absent."""
+        monkeypatch.delenv("SUPERQR_PROTOCOL_ROOT", raising=False)
+        # Force fallback to local
+        import superqr_desktop.v7_capacity_lab.protocol_bridge as pb
+        pb._protocol_root = None
+        pb._protocol_available = False
+
+        # All accessors should return local modules
+        from superqr_desktop.v7_capacity_lab.protocol_bridge import (
+            get_protocol_model, get_protocol_palettes, get_protocol_profiles,
+            get_protocol_patterns, get_protocol_geometry, get_protocol_layouts,
+            get_protocol_vectors, get_protocol_calibration, get_protocol_prng,
+        )
+        for getter in [get_protocol_model, get_protocol_palettes, get_protocol_profiles,
+                       get_protocol_patterns, get_protocol_geometry, get_protocol_layouts,
+                       get_protocol_vectors, get_protocol_calibration, get_protocol_prng]:
+            mod = getter()
+            assert mod is not None
+
+    def test_canonical_40x40_v6_ref_4_resolves_locally(self, monkeypatch):
+        """Canonical config resolves using local implementations."""
+        monkeypatch.delenv("SUPERQR_PROTOCOL_ROOT", raising=False)
+        import superqr_desktop.v7_capacity_lab.protocol_bridge as pb
+        pb._protocol_root = None
+        pb._protocol_available = False
+
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        canonical = find_canonical_reference_profile(40, "v6_reference_4", 42)
+        assert canonical is not None
+        assert canonical.name == "ref_40x40_v6_reference_4_seed42"
+
+    def test_canonical_96x96_candidate_8_a_resolves_locally(self, monkeypatch):
+        monkeypatch.delenv("SUPERQR_PROTOCOL_ROOT", raising=False)
+        import superqr_desktop.v7_capacity_lab.protocol_bridge as pb
+        pb._protocol_root = None
+        pb._protocol_available = False
+
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        canonical = find_canonical_reference_profile(96, "candidate_8_a", 42)
+        assert canonical is not None
+        assert canonical.name == "ref_96x96_candidate_8_a_seed42"
+
+    def test_deterministic_frame_matches_canonical_hash(self, monkeypatch):
+        """Local generation produces same hash as packaged golden vectors."""
+        monkeypatch.delenv("SUPERQR_PROTOCOL_ROOT", raising=False)
+        import superqr_desktop.v7_capacity_lab.protocol_bridge as pb
+        pb._protocol_root = None
+        pb._protocol_available = False
+
+        from superqr_desktop.v7_capacity_lab._local.prng import Xorshift32
+        from superqr_desktop.v7_capacity_lab._local.palettes import get_palette
+        from superqr_desktop.v7_capacity_lab._local.patterns import random_fill
+        from superqr_desktop.v7_capacity_lab._local.vectors import compute_symbol_hashes
+
+        palette = get_palette("v6_reference_4")
+        prng = Xorshift32(42)
+        matrix = random_fill(prng, 40, 40, palette.name, palette.bits_per_cell)
+        hashes = compute_symbol_hashes(matrix)
+
+        # Golden from reference_vectors.json
+        assert hashes["symbol_crc32"] == "8B5F63DD"
+        assert hashes["symbol_sha256"] == "06b045348c4193e1be03a704889200afdf17ef12d38804684e2387b2b306f518"
+
+    @pytest.fixture(autouse=True)
+    def init_pygame_once(self):
+        pygame.init()
+        yield
+        pygame.quit()
+
+    def test_lab_renderer_works_without_protocol_repo(self, monkeypatch):
+        """LabRenderer initializes and renders without protocol repo."""
+        monkeypatch.delenv("SUPERQR_PROTOCOL_ROOT", raising=False)
+        import superqr_desktop.v7_capacity_lab.protocol_bridge as pb
+        pb._protocol_root = None
+        pb._protocol_available = False
+
+        from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
+        from superqr_desktop.v7_capacity_lab._local.prng import Xorshift32
+        from superqr_desktop.v7_capacity_lab._local.palettes import get_palette
+        from superqr_desktop.v7_capacity_lab._local.patterns import random_fill
+
+        renderer = LabRenderer(marker_size=400)
+        palette = get_palette("candidate_8_a")
+        prng = Xorshift32(42)
+        matrix = random_fill(prng, 96, 96, palette.name, palette.bits_per_cell)
+        renderer.prepare_logical_frame(matrix)
+        assert renderer.cached_frame_display is not None
+        assert renderer.timings.total_prepare_us >= 0
+
+    def test_controlapp_v7_prepare_without_protocol_repo(self, monkeypatch):
+        """Unified ControlApp V7 Prepare works without protocol repo."""
+        monkeypatch.delenv("SUPERQR_PROTOCOL_ROOT", raising=False)
+        import superqr_desktop.v7_capacity_lab.protocol_bridge as pb
+        pb._protocol_root = None
+        pb._protocol_available = False
+
+        from superqr_desktop.contract.loader import load_contract
+        from superqr_desktop.app import ControlApp
+        contract, h = load_contract()
+        app = ControlApp(contract, h)
+        try:
+            app.engine_var.set("V7 Development")
+            app._on_engine_changed()
+            app._v7_grid_var.set("40")
+            app._v7_palette_var.set("v6_reference_4")
+            app._v7_frames_var.set("5")
+            app._v7_prepare()
+            assert app._v7_state == "READY"
+            assert app._v7_validation_passed is True
+        finally:
+            app.root.destroy()
+
+    def test_importing_unified_app_works_without_protocol_repo(self, monkeypatch):
+        """Importing the unified app succeeds without protocol repo."""
+        monkeypatch.delenv("SUPERQR_PROTOCOL_ROOT", raising=False)
+        import superqr_desktop.v7_capacity_lab.protocol_bridge as pb
+        pb._protocol_root = None
+        pb._protocol_available = False
+
+        from superqr_desktop.app import main, ControlApp
+        assert callable(main)
+        assert ControlApp is not None

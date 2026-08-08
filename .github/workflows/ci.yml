@@ -30,9 +30,57 @@ jobs:
         run: |
           python -m build
 
-      - name: Smoke test packaged contract loading
+      - name: Smoke test packaged wheel (V6 + V7)
         run: |
           python -m venv fresh_env
           source fresh_env/bin/activate
           pip install dist/*.whl
-          python -c "from superqr_desktop.contract.loader import load_contract; data, contract_hash = load_contract(); print(f'Successfully loaded packaged contract with hash: {contract_hash}')"
+          python -c "
+          # 1. V6 packaged contract
+          from superqr_desktop.contract.loader import load_contract
+          data, h = load_contract()
+          print(f'1. V6 contract: hash={h[:16]}... OK')
+
+          # 2. V7 packaged reference data
+          from superqr_desktop.v7_capacity_lab.protocol_bridge import load_reference_vectors
+          vectors = load_reference_vectors()
+          entries = vectors['vectors']
+          print(f'2. V7 reference vectors: {len(entries)} entries OK')
+
+          # 3. Exactly 14 canonical profiles
+          assert len(entries) == 14, f'expected 14 profiles, got {len(entries)}'
+          print('3. Entry count == 14 OK')
+
+          # 4. ref_40x40_v6_reference_4_seed42 resolves
+          from superqr_desktop.v7_capacity_lab.cross_validate import find_canonical_reference_profile
+          c40 = find_canonical_reference_profile(40, 'v6_reference_4', 42)
+          assert c40 is not None
+          assert c40.name == 'ref_40x40_v6_reference_4_seed42'
+          print('4. ref_40x40_v6_reference_4_seed42 OK')
+
+          # 5. ref_96x96_candidate_8_a_seed42 resolves
+          c96 = find_canonical_reference_profile(96, 'candidate_8_a', 42)
+          assert c96 is not None
+          assert c96.name == 'ref_96x96_candidate_8_a_seed42'
+          print('5. ref_96x96_candidate_8_a_seed42 OK')
+
+          # 6. Regenerate deterministic frame and verify canonical hash
+          from superqr_desktop.v7_capacity_lab._local.prng import Xorshift32
+          from superqr_desktop.v7_capacity_lab._local.palettes import get_palette
+          from superqr_desktop.v7_capacity_lab._local.patterns import random_fill
+          from superqr_desktop.v7_capacity_lab._local.vectors import compute_symbol_hashes
+          palette = get_palette('v6_reference_4')
+          prng = Xorshift32(42)
+          matrix = random_fill(prng, 40, 40, palette.name, palette.bits_per_cell)
+          hashes = compute_symbol_hashes(matrix)
+          assert hashes['symbol_crc32'] == '8B5F63DD'
+          assert hashes['symbol_sha256'] == '06b045348c4193e1be03a704889200afdf17ef12d38804684e2387b2b306f518'
+          print(f'6. Regenerated frame CRC32={hashes[\"symbol_crc32\"]} SHA256={hashes[\"symbol_sha256\"][:16]}... OK')
+
+          # 7. Import app
+          from superqr_desktop.app import main
+          print('7. superqr_desktop.app imported OK')
+
+          print()
+          print('All packaged wheel smoke checks passed.')
+          "

@@ -147,6 +147,10 @@ def validate_profile(profile) -> ValidationResult:
     )
 
 
+class CrossValidationError(Exception):
+    """Cross-validation failed — Desktop output would not agree with protocol vectors."""
+
+
 def validate_reference_profiles() -> list[ValidationResult]:
     """Validate all 14 standard reference profiles.
 
@@ -163,12 +167,10 @@ def validate_reference_profiles() -> list[ValidationResult]:
 
 
 def validate_or_fail(profile) -> None:
-    """Validate a user profile against canonical golden vectors and exit on failure.
+    """Validate a user profile against canonical golden vectors.
 
-    The profile's user-facing name (e.g. "lab_40x40_...") is resolved to
-    the canonical reference profile by matching (grid_size, palette_name, seed).
-    If no canonical reference exists for the profile's parameters, fails
-    immediately rather than rendering unvalidated data.
+    Raises CrossValidationError on any mismatch so callers in both CLI
+    and GUI contexts can handle failure appropriately.
     """
     canonical = _resolve_canonical_or_fail(profile)
 
@@ -179,19 +181,16 @@ def validate_or_fail(profile) -> None:
         print(f"  Canonical reference: '{canonical.name}'")
         print("Desktop output would not agree with protocol reference vectors.")
         print("Refusing to render potentially incompatible experimental data.")
-        sys.exit(1)
+        raise CrossValidationError(
+            f"Cross-validation failed for '{profile.name}' "
+            f"(canonical: '{canonical.name}')"
+        )
     print(f"\nCross-validation PASSED for profile '{profile.name}'.")
     print(f"  Matched canonical reference: '{canonical.name}'")
 
 
 def _resolve_canonical_or_fail(user_profile):
-    """Find the matching canonical reference profile, or fail hard.
-
-    Matching is by (grid_size, palette_name, seed) — the three parameters
-    that determine the symbol matrix content for the first data frame.
-    Dwell epochs, calibration config, and layout are not part of the
-    golden-vector identity.
-    """
+    """Find the matching canonical reference profile, or raise CrossValidationError."""
     profiles_mod = get_protocol_profiles()
     reference_profiles = profiles_mod.build_reference_profiles()
 
@@ -201,19 +200,25 @@ def _resolve_canonical_or_fail(user_profile):
                 and rp.seed == user_profile.seed):
             return rp
 
-    print(f"\nCROSS-VALIDATION FAILED for profile '{user_profile.name}'.")
-    print(f"  Grid:     {user_profile.grid_size}x{user_profile.grid_size}")
-    print(f"  Palette:  {user_profile.palette_name}")
-    print(f"  Seed:     {user_profile.seed}")
-    print()
-    print("No canonical reference vector exists for this (grid, palette, seed)")
-    print("combination. Available canonical reference configurations:")
+    msg_lines = [
+        f"\nCROSS-VALIDATION FAILED for profile '{user_profile.name}'.",
+        f"  Grid:     {user_profile.grid_size}x{user_profile.grid_size}",
+        f"  Palette:  {user_profile.palette_name}",
+        f"  Seed:     {user_profile.seed}",
+        "",
+        "No canonical reference vector exists for this (grid, palette, seed)",
+        "combination. Available canonical reference configurations:",
+    ]
     for rp in reference_profiles:
-        print(f"  - {rp.name}")
-    print()
-    print("Physical Capacity Lab currently requires a canonical reference profile.")
-    print("Refusing to render unvalidated experimental data.")
-    sys.exit(1)
+        msg_lines.append(f"  - {rp.name}")
+    msg_lines.append("")
+    msg_lines.append("Physical Capacity Lab currently requires a canonical reference profile.")
+    msg_lines.append("Refusing to render unvalidated experimental data.")
+    print("\n".join(msg_lines))
+    raise CrossValidationError(
+        f"No canonical reference for ({user_profile.grid_size}, "
+        f"{user_profile.palette_name}, seed={user_profile.seed})"
+    )
 
 
 def find_canonical_reference_profile(grid_size: int, palette_name: str, seed: int):
@@ -249,23 +254,26 @@ def _print_result(result: ValidationResult) -> None:
 def main() -> None:
     """Standalone: validate all reference profiles."""
     print("V7 Capacity Lab — Cross-Validation\n")
-    results = validate_reference_profiles()
+    try:
+        results = validate_reference_profiles()
 
-    all_passed = all(r.passed for r in results)
-    print()
-    for r in results:
-        _print_result(r)
+        all_passed = all(r.passed for r in results)
         print()
+        for r in results:
+            _print_result(r)
+            print()
 
-    print(f"{'='*60}")
-    if all_passed:
-        print(f"All {len(results)} reference profiles validated successfully.")
-    else:
-        failed = [r for r in results if not r.passed]
-        print(f"{len(failed)}/{len(results)} profiles FAILED validation.")
-        print("Failed profiles:")
-        for r in failed:
-            print(f"  - {r.profile_name}")
+        print(f"{'='*60}")
+        if all_passed:
+            print(f"All {len(results)} reference profiles validated successfully.")
+        else:
+            failed = [r for r in results if not r.passed]
+            print(f"{len(failed)}/{len(results)} profiles FAILED validation.")
+            print("Failed profiles:")
+            for r in failed:
+                print(f"  - {r.profile_name}")
+            sys.exit(1)
+    except CrossValidationError:
         sys.exit(1)
 
 

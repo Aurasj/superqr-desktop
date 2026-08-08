@@ -320,18 +320,15 @@ class LabRunner:
 def run_lab(args: argparse.Namespace) -> None:
     """Run the Capacity Lab with the given configuration.
 
-    This is the programmatic entry point used by the launcher.
-    Pygame is initialized here — caller must ensure no other UI loop is active.
+    Legacy CLI entry point. The primary user workflow is now through the
+    integrated ControlApp (``superqr-desktop``).
     """
     runner = LabRunner(args)
     runner.run()
 
 
 def main() -> None:
+    """Legacy CLI entry point — kept for headless / scripted use."""
     parser = build_arg_parser()
     args = parser.parse_args()
     run_lab(args)
-
-
-if __name__ == "__main__":
-    main()
