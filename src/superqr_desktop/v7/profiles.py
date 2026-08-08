@@ -86,7 +86,11 @@ PROFILES = (
 BY_ID = {p.id: p for p in PROFILES}
 BY_KEY = {p.key: p for p in PROFILES}
 BY_LABEL = {p.label: p for p in PROFILES}
-DEFAULT_PROFILE = BY_KEY["balanced_48_4"]
+
+# Physical captures currently establish 40x40/4-color as the reliable baseline.
+# Higher-density and 8-color profiles remain selectable experiments until AUTO
+# negotiation/FEC can promote them based on measured receiver quality.
+DEFAULT_PROFILE = BY_KEY["safe_40_4"]
 
 
 def get_profile(value: int | str | OpticalProfile) -> OpticalProfile:
