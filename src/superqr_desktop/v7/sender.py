@@ -27,7 +27,10 @@ class V7SenderSession:
         self.session_id: int | None = None
         self.total_frames = 0
         self.current_frame_idx = 0
-        self.interval_ms = 67
+        # Until per-frame FEC is enabled, 200 ms gives a 30 fps phone several
+        # independent observations of each optical frame. Faster presets remain
+        # available explicitly for capacity testing.
+        self.interval_ms = 200
         self.profile: OpticalProfile = DEFAULT_PROFILE
 
     def _next_session_id(self) -> int:
@@ -73,7 +76,12 @@ class V7SenderSession:
         self.session_id = self._next_session_id()
         self.total_frames = total_frames
         self.current_frame_idx = 0
-        self.transfer_state = "READY"
+
+        # Selecting a file is the send action. Previously prepare_transfer left a
+        # perfectly valid frame 0 parked on screen in READY state, so Android could
+        # report RECEIVING forever while collecting only duplicates if the user did
+        # not press START. A prepared transfer now immediately enters the carousel.
+        self.transfer_state = "SENDING"
         return self.session_id
 
     def _read_package_slice(self, offset: int, length: int) -> bytes:
@@ -122,8 +130,10 @@ class V7SenderSession:
         return SymbolMatrix(rows=g, cols=g, palette_name=self.profile.palette_name, symbols=rows)
 
     def start_transfer(self) -> bool:
-        if self.total_frames < 1 or self.transfer_state not in ("READY", "STOPPED"):
+        if self.total_frames < 1:
             return False
+        # START is now a restart action as well, useful after Stop or when the
+        # receiver asks for a clean new carousel pass.
         self.transfer_state = "SENDING"
         self.current_frame_idx = 0
         return True
