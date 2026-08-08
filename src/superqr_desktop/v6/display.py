@@ -5,6 +5,8 @@ from superqr_desktop.v6.diagnostics import V6DisplayMetrics
 CANONICAL_SIZE = 1000
 
 class DisplayController:
+    """Shared display shell built from the physically validated V6 carrier path."""
+
     def __init__(self, contract: dict):
         self.contract = contract
         self.screen = None
@@ -17,7 +19,7 @@ class DisplayController:
     def detect_displays() -> list[dict]:
         if not pygame.display.get_init():
             pygame.display.init()
-            
+
         displays = []
         try:
             sizes = pygame.display.get_desktop_sizes()
@@ -63,7 +65,7 @@ class DisplayController:
         screen_w = disp_info["width"]
         screen_h = disp_info["height"]
 
-        # Canonical V6 metrics at 1000x1000 scale
+        # Carrier metrics remain canonical at 1000x1000 scale.
         metrics = V6DisplayMetrics(self.contract, scale=1.0)
 
         if is_fullscreen:
@@ -79,7 +81,7 @@ class DisplayController:
             self.screen = pygame.display.set_mode((canvas_w, canvas_h), flags, display=0)
             self.current_display_index = 0
 
-        pygame.display.set_caption("SuperQR V6 Optical Marker Output")
+        pygame.display.set_caption("SuperQR Optical Marker Output")
 
         if not is_fullscreen:
             try:
@@ -89,17 +91,16 @@ class DisplayController:
             except Exception:
                 pass
 
-        # V6Renderer always renders canonically at 1000x1000
+        # Frozen V6 renderer is retained for carrier/debug patterns.
         self.renderer = V6Renderer(self.contract, CANONICAL_SIZE)
         return metrics
 
     def _blit_renderer(self):
         canvas_w, canvas_h = self.screen.get_size()
 
-        # Crisp pixel-preserving scaling (nearest-neighbor via pygame.transform.scale)
         if self.marker_size != CANONICAL_SIZE:
             scaled_surface = pygame.transform.scale(
-                self.renderer.surface, 
+                self.renderer.surface,
                 (self.marker_size, self.marker_size)
             )
         else:
@@ -114,8 +115,6 @@ class DisplayController:
     def render(self, mode: str):
         if not self.screen or not self.renderer:
             return
-
-        # Canonical rendering at 1000x1000
         self.renderer.draw_static_features()
         self.renderer.draw_grid(mode)
         self.screen.fill((255, 255, 255))
@@ -124,8 +123,6 @@ class DisplayController:
     def render_indexes(self, indexes: list[int]):
         if not self.screen or not self.renderer:
             return
-
-        # Canonical rendering at 1000x1000
         self.renderer.draw_static_features()
         self.renderer.draw_grid_indexes(indexes)
         self.screen.fill((255, 255, 255))
