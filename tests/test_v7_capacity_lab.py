@@ -544,6 +544,170 @@ class TestV6Untouched:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Launcher tests
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _tk_available() -> bool:
+    """Check whether Tkinter can create a root window in this environment."""
+    try:
+        import tkinter as _tk
+        root = _tk.Tk()
+        root.destroy()
+        return True
+    except Exception:
+        return False
+
+
+TK_AVAILABLE = _tk_available()
+TK_SKIP_REASON = "Tkinter Tcl/Tk not available in this environment"
+
+
+class TestLauncher:
+    def test_launcher_importable(self):
+        """Launcher module imports without side effects."""
+        from superqr_desktop.v7_capacity_lab import lab_launcher
+        assert lab_launcher is not None
+
+    def test_detect_displays_returns_list(self):
+        """Display detection should work without creating a window."""
+        from superqr_desktop.v7_capacity_lab.lab_launcher import _detect_displays
+        displays = _detect_displays()
+        assert len(displays) >= 1
+        for d in displays:
+            assert "index" in d
+            assert "label" in d
+            assert "width" in d
+            assert "height" in d
+
+    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
+    def test_validation_passes_valid_config(self):
+        """Default settings should validate cleanly."""
+        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
+        launcher = LabLauncher()
+        try:
+            errors = launcher._validate()
+            assert errors == [], f"Expected no errors, got: {errors}"
+        finally:
+            launcher.root.destroy()
+
+    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
+    def test_validation_rejects_bad_grid(self):
+        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
+        launcher = LabLauncher()
+        try:
+            launcher._grid_var.set("99")
+            errors = launcher._validate()
+            assert len(errors) >= 1
+            assert any("Grid" in e for e in errors)
+        finally:
+            launcher.root.destroy()
+
+    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
+    def test_validation_rejects_zero_seed(self):
+        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
+        launcher = LabLauncher()
+        try:
+            launcher._seed_var.set("0")
+            errors = launcher._validate()
+            assert len(errors) >= 1
+            assert any("Seed" in e or "seed" in e for e in errors)
+        finally:
+            launcher.root.destroy()
+
+    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
+    def test_validation_rejects_bad_frames(self):
+        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
+        launcher = LabLauncher()
+        try:
+            launcher._frames_var.set("0")
+            errors = launcher._validate()
+            assert len(errors) >= 1
+            assert any("Frames" in e for e in errors)
+        finally:
+            launcher.root.destroy()
+
+    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
+    def test_validation_rejects_small_marker(self):
+        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
+        launcher = LabLauncher()
+        try:
+            launcher._marker_var.set("50")
+            errors = launcher._validate()
+            assert len(errors) >= 1
+            assert any("Marker" in e for e in errors)
+        finally:
+            launcher.root.destroy()
+
+    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
+    def test_build_args_produces_namespace(self):
+        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
+        launcher = LabLauncher()
+        try:
+            launcher._grid_var.set("80")
+            launcher._palette_var.set("candidate_8_a")
+            launcher._dwell_var.set("3")
+            launcher._seed_var.set("99")
+            launcher._layout_var.set("2x2")
+            launcher._frames_var.set("50")
+            launcher._marker_var.set("800")
+            launcher._calib_var.set(False)
+            launcher._fullscreen_var.set(True)
+            launcher._hud_var.set(True)
+
+            args = launcher._build_args()
+            assert args.grid == 80
+            assert args.palette == "candidate_8_a"
+            assert args.dwell == 3
+            assert args.seed == 99
+            assert args.layout == "2x2"
+            assert args.frames == 50
+            assert args.marker_size == 800
+            assert args.no_calibration is True
+            assert args.fullscreen is True
+            assert args.hud is True
+        finally:
+            launcher.root.destroy()
+
+    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
+    def test_build_args_no_calibration_inverts_calib_var(self):
+        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
+        launcher = LabLauncher()
+        try:
+            launcher._calib_var.set(True)
+            args = launcher._build_args()
+            assert args.no_calibration is False
+
+            launcher._calib_var.set(False)
+            args = launcher._build_args()
+            assert args.no_calibration is True
+        finally:
+            launcher.root.destroy()
+
+    @pytest.mark.skipif(not TK_AVAILABLE, reason=TK_SKIP_REASON)
+    def test_get_display_index_matches_labels(self):
+        from superqr_desktop.v7_capacity_lab.lab_launcher import LabLauncher
+        launcher = LabLauncher()
+        try:
+            labels = [d["label"] for d in launcher.displays]
+            for idx, label in enumerate(labels):
+                launcher._display_var.set(label)
+                assert launcher._get_display_index() == idx
+        finally:
+            launcher.root.destroy()
+
+    def test_cli_main_importable(self):
+        """lab_launcher.main() should be importable and callable."""
+        from superqr_desktop.v7_capacity_lab.lab_launcher import main as launcher_main
+        assert callable(launcher_main)
+
+    def test_lab_runner_cli_still_works(self):
+        """The CLI entry point must continue to work after the refactor."""
+        from superqr_desktop.v7_capacity_lab.lab_runner import main as runner_main
+        assert callable(runner_main)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Integration: render + cross-validate
 # ─────────────────────────────────────────────────────────────────────
 
