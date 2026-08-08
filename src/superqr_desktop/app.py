@@ -130,7 +130,7 @@ class ControlApp:
         row.pack(fill="x", pady=(8, 0))
         ttk.Label(row, text="Frame interval", style="Card.TLabel").pack(side="left")
         self.interval_combo = ttk.Combobox(row, values=[f"{v} ms" for v in V7SenderSession.INTERVAL_PRESETS], state="readonly", width=9)
-        self.interval_combo.set("67 ms")
+        self.interval_combo.set(f"{self.sender.interval_ms} ms")
         self.interval_combo.pack(side="left", padx=8)
         self.interval_combo.bind("<<ComboboxSelected>>", self._on_interval_selected)
         self.lbl_profile_detail = ttk.Label(row, text="", style="Muted.TLabel")
@@ -140,7 +140,7 @@ class ControlApp:
         row = ttk.Frame(transfer, style="Card.TFrame")
         row.pack(fill="x")
         ttk.Button(row, text="Select file", command=self.select_file).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        self.btn_start = ttk.Button(row, text="START", style="Accent.TButton", command=self.start_transfer)
+        self.btn_start = ttk.Button(row, text="START / RESTART", style="Accent.TButton", command=self.start_transfer)
         self.btn_start.pack(side="left", fill="x", expand=True, padx=5)
         ttk.Button(row, text="Stop", command=self.stop_transfer).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
@@ -206,6 +206,7 @@ class ControlApp:
             self.sender.set_profile(BY_LABEL[self.profile_var.get()])
             self.v7_renderer = None
             if self.sender.total_frames:
+                self.sender_last_tick = time.monotonic()
                 self._render_current_transfer_frame()
             self._update_sender_ui()
         except Exception as exc:
@@ -214,6 +215,7 @@ class ControlApp:
     def _on_interval_selected(self, _event=None):
         try:
             self.sender.set_interval(int(self.interval_combo.get().replace(" ms", "")))
+            self.sender_last_tick = time.monotonic()
             self._update_sender_ui()
         except ValueError:
             pass
@@ -245,6 +247,10 @@ class ControlApp:
             return
         try:
             self.sender.prepare_transfer(path)
+            # prepare_transfer enters SENDING immediately. Start the dwell clock at
+            # the moment frame 0 is actually presented so the first frame gets the
+            # full configured interval instead of being advanced instantly.
+            self.sender_last_tick = time.monotonic()
             self._render_current_transfer_frame()
             self._update_sender_ui()
         except Exception as exc:
