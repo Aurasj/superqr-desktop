@@ -1,0 +1,233 @@
+"""V7 Capacity Lab renderer.
+
+Converts protocol SymbolMatrix objects to display frames via a compact
+byte-buffer path with nearest-neighbor scaling. No per-cell draw calls.
+
+V6_REFERENCE_LAB_CARRIER: temporary laboratory scaffolding that reuses
+the physically validated V6 border/anchors/homography structure.
+This does NOT define final V7 geometry.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+import pygame
+
+from superqr_desktop.v7_capacity_lab.protocol_bridge import (
+    load_v6_visual_contract,
+    get_protocol_geometry,
+    get_protocol_palettes,
+)
+
+
+@dataclass
+class RenderTimings:
+    """Per-frame timing measurements in microseconds."""
+    symbol_matrix_to_rgb_us: int = 0
+    surface_creation_us: int = 0
+    payload_scale_us: int = 0
+    compose_us: int = 0
+    total_prepare_us: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "symbol_matrix_to_rgb_us": self.symbol_matrix_to_rgb_us,
+            "surface_creation_us": self.surface_creation_us,
+            "payload_scale_us": self.payload_scale_us,
+            "compose_us": self.compose_us,
+            "total_prepare_us": self.total_prepare_us,
+        }
+
+
+def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
+    h = hex_str.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+class V6CarrierRenderer:
+    """Renders the V6 outer geometry once as a static cached Surface.
+
+    V6_REFERENCE_LAB_CARRIER — temporary laboratory scaffolding.
+    Does NOT define final V7 geometry.
+    """
+
+    def __init__(self, canonical_size: int = 1000):
+        self.canonical_size = canonical_size
+        self.contract = load_v6_visual_contract()
+        self._scale = canonical_size / self.contract["canvas"]["width"]
+        self._surface: pygame.Surface | None = None
+
+        # Build palette from V6 contract
+        self._palette: dict[str, tuple[int, int, int]] = {}
+        for idx_key, entry in self.contract["palette"]["indexes"].items():
+            self._palette[entry["name"]] = _hex_to_rgb(entry["sRGB"])
+
+    @property
+    def surface(self) -> pygame.Surface:
+        """Return the cached carrier surface, building it on first access."""
+        if self._surface is None:
+            self._surface = self._build()
+        return self._surface
+
+    def _rect(self, bbox: list) -> pygame.Rect:
+        x1 = int(bbox[0] * self._scale)
+        y1 = int(bbox[1] * self._scale)
+        x2 = int(bbox[2] * self._scale)
+        y2 = int(bbox[3] * self._scale)
+        return pygame.Rect(x1, y1, x2 - x1, y2 - y1)
+
+    def _build(self) -> pygame.Surface:
+        """Build the complete V6 carrier surface once."""
+        surf = pygame.Surface((self.canonical_size, self.canonical_size))
+        surf.fill((255, 255, 255))
+
+        # Border
+        b = self.contract["border"]
+        stroke = b["stroke_width"]
+        outer = b["bbox"]
+        inner = [outer[0] + stroke, outer[1] + stroke,
+                 outer[2] - stroke, outer[3] - stroke]
+        pygame.draw.rect(surf, self._palette["BLACK"], self._rect(outer))
+        pygame.draw.rect(surf, self._palette["WHITE"], self._rect(inner))
+
+        # Anchors
+        for _key, anchor in self.contract["anchors"]["elements"].items():
+            pygame.draw.rect(surf, self._palette["BLACK"], self._rect(anchor["bbox"]))
+            core_bbox = anchor["identity_pattern"]["core_bbox"]
+            pygame.draw.rect(surf, self._palette["WHITE"], self._rect(core_bbox))
+            quadrants = anchor["identity_pattern"]["black_quadrants"]
+            cx = (core_bbox[0] + core_bbox[2]) // 2
+            cy = (core_bbox[1] + core_bbox[3]) // 2
+            for q in quadrants:
+                if q == "top_left":
+                    qb = [core_bbox[0], core_bbox[1], cx, cy]
+                elif q == "top_right":
+                    qb = [cx, core_bbox[1], core_bbox[2], cy]
+                elif q == "bottom_left":
+                    qb = [core_bbox[0], cy, cx, core_bbox[3]]
+                elif q == "bottom_right":
+                    qb = [cx, cy, core_bbox[2], core_bbox[3]]
+                else:
+                    continue
+                pygame.draw.rect(surf, self._palette["BLACK"], self._rect(qb))
+
+        # Calibration pilots
+        for _key, pilot in self.contract["calibration_pilots"]["elements"].items():
+            pygame.draw.rect(surf, self._palette[pilot["carrier_color"]],
+                             self._rect(pilot["carrier_bbox"]))
+            pygame.draw.rect(surf, self._palette[pilot["core_color"]],
+                             self._rect(pilot["core_bbox"]))
+
+        # Border tracking
+        for _key, tracker in self.contract["border_tracking"]["elements"].items():
+            pygame.draw.rect(surf, self._palette[tracker["color"]],
+                             self._rect(tracker["bbox"]))
+
+        # Phase sync cells (statically rendered — SYNC_0=BLACK, SYNC_1=WHITE)
+        for key, sync in self.contract["phase_sync_cells"]["elements"].items():
+            color = self._palette["BLACK"] if key == "SYNC_0" else self._palette["WHITE"]
+            pygame.draw.rect(surf, color, self._rect(sync["bbox"]))
+
+        return surf
+
+
+class LabRenderer:
+    """Renders protocol SymbolMatrix objects to display frames.
+
+    Path:
+        SymbolMatrix → RGB byte buffer → native grid Surface →
+        nearest-neighbor scale to display payload rect →
+        compose with cached carrier → cache for dwell repeats.
+    """
+
+    def __init__(self, marker_size: int):
+        self.marker_size = marker_size
+        self._canonical_size = 1000
+        self._marker_scale = marker_size / self._canonical_size
+
+        # Carrier: build canonical, scale once to marker size
+        self._carrier_canonical = V6CarrierRenderer(self._canonical_size)
+        carrier_src = self._carrier_canonical.surface
+        if marker_size != self._canonical_size:
+            self._carrier_display = pygame.transform.scale(
+                carrier_src, (marker_size, marker_size))
+        else:
+            self._carrier_display = carrier_src
+
+        # Cached composed frame (reused for dwell repeats)
+        self._cached_frame: pygame.Surface | None = None
+
+        self.timings = RenderTimings()
+
+    @property
+    def cached_frame_display(self) -> pygame.Surface | None:
+        return self._cached_frame
+
+    def _compute_display_payload_rect(self, payload_bbox) -> pygame.Rect:
+        """Map canonical payload_bbox to display coordinates."""
+        x = int(payload_bbox[0] * self._marker_scale)
+        y = int(payload_bbox[1] * self._marker_scale)
+        w = int((payload_bbox[2] - payload_bbox[0]) * self._marker_scale)
+        h = int((payload_bbox[3] - payload_bbox[1]) * self._marker_scale)
+        return pygame.Rect(x, y, w, h)
+
+    def prepare_logical_frame(self, symbol_matrix) -> None:
+        """Build and cache the display frame for a new logical frame.
+
+        Called once per logical frame change, not per refresh.
+        The cached result is reused for remaining dwell refreshes.
+
+        Args:
+            symbol_matrix: protocol SymbolMatrix (has .symbols[row][col], .rows, .cols, .palette_name)
+        """
+        t_start = time.perf_counter_ns()
+
+        palette_mod = get_protocol_palettes()
+        palette = palette_mod.get_palette(symbol_matrix.palette_name)
+
+        # Build rgb lookup from palette color_map
+        rgb_lookup = {idx: _hex_to_rgb(hex_str) for idx, hex_str in palette.color_map.items()}
+
+        # 1. Symbol matrix → RGB byte buffer
+        t1 = time.perf_counter_ns()
+        grid_w = symbol_matrix.cols
+        grid_h = symbol_matrix.rows
+        buf = bytearray(grid_w * grid_h * 3)
+        pos = 0
+        for row in symbol_matrix.symbols:
+            for sym_idx in row:
+                r, g, b = rgb_lookup[sym_idx]
+                buf[pos] = r
+                buf[pos + 1] = g
+                buf[pos + 2] = b
+                pos += 3
+        t2 = time.perf_counter_ns()
+
+        # 2. Create native grid-size Surface
+        native_surf = pygame.image.frombytes(bytes(buf), (grid_w, grid_h), "RGB")
+        t3 = time.perf_counter_ns()
+
+        # 3. Scale directly to display payload rect (single scale, nearest-neighbor)
+        geo_mod = get_protocol_geometry()
+        geom = geo_mod.build_geometry(max(grid_w, grid_h))
+        display_payload_rect = self._compute_display_payload_rect(geom.payload_bbox)
+        payload_scaled = pygame.transform.scale(native_surf,
+                                                 (display_payload_rect.width,
+                                                  display_payload_rect.height))
+        t4 = time.perf_counter_ns()
+
+        # 4. Compose: copy cached carrier, blit payload
+        frame = self._carrier_display.copy()
+        frame.blit(payload_scaled, (display_payload_rect.x, display_payload_rect.y))
+        t5 = time.perf_counter_ns()
+
+        self._cached_frame = frame
+
+        # Record timings (ns → us)
+        self.timings.symbol_matrix_to_rgb_us = (t2 - t1) // 1000
+        self.timings.surface_creation_us = (t3 - t2) // 1000
+        self.timings.payload_scale_us = (t4 - t3) // 1000
+        self.timings.compose_us = (t5 - t4) // 1000
+        self.timings.total_prepare_us = (t5 - t_start) // 1000
