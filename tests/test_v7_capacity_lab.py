@@ -125,6 +125,122 @@ class TestCrossValidate:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Canonical profile resolution tests
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestCanonicalProfileResolution:
+    def test_40x40_v6_ref_4_seed42_resolves(self):
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        canonical = find_canonical_reference_profile(40, "v6_reference_4", 42)
+        assert canonical is not None
+        assert canonical.name == "ref_40x40_v6_reference_4_seed42"
+
+    def test_40x40_candidate_8_a_seed42_resolves(self):
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        canonical = find_canonical_reference_profile(40, "candidate_8_a", 42)
+        assert canonical is not None
+        assert canonical.name == "ref_40x40_candidate_8_a_seed42"
+
+    def test_96x96_v6_ref_4_seed42_resolves(self):
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        canonical = find_canonical_reference_profile(96, "v6_reference_4", 42)
+        assert canonical is not None
+        assert canonical.name == "ref_96x96_v6_reference_4_seed42"
+
+    def test_96x96_candidate_8_a_seed42_resolves(self):
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        canonical = find_canonical_reference_profile(96, "candidate_8_a", 42)
+        assert canonical is not None
+        assert canonical.name == "ref_96x96_candidate_8_a_seed42"
+
+    def test_all_14_canonical_configs_resolve(self):
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        from superqr_desktop.v7_capacity_lab.protocol_bridge import (
+            get_protocol_profiles,
+        )
+        profiles_mod = get_protocol_profiles()
+        all_ref = profiles_mod.build_reference_profiles()
+        assert len(all_ref) == 14
+
+        for rp in all_ref:
+            canonical = find_canonical_reference_profile(
+                rp.grid_size, rp.palette_name, rp.seed,
+            )
+            assert canonical is not None, (
+                f"No canonical found for {rp.grid_size}, {rp.palette_name}, {rp.seed}"
+            )
+            assert canonical.name == rp.name
+
+    def test_non_reference_seed_99_returns_none(self):
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        canonical = find_canonical_reference_profile(40, "v6_reference_4", 99)
+        assert canonical is None
+
+    def test_non_reference_seed_7_returns_none(self):
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            find_canonical_reference_profile,
+        )
+        canonical = find_canonical_reference_profile(80, "candidate_8_a", 7)
+        assert canonical is None
+
+    def test_validate_or_fail_with_lab_named_profile_passes(self, monkeypatch):
+        """A 'lab_*' profile matching canonical (grid, palette, seed)
+        should resolve to the ref_* profile and pass validation."""
+        from superqr_desktop.v7_capacity_lab.cross_validate import validate_or_fail
+        from superqr_desktop.v7_capacity_lab.protocol_bridge import (
+            get_protocol_profiles, get_protocol_model,
+        )
+
+        # Build a user profile with a "lab_*" style name
+        profiles_mod = get_protocol_profiles()
+        model_mod = get_protocol_model()
+        CalibrationConfig = model_mod.CalibrationConfig
+
+        profile = profiles_mod.build_profile(
+            name="lab_40x40_v6_reference_4_seed42",
+            grid_size=40,
+            palette_name="v6_reference_4",
+            layout_name="single",
+            seed=42,
+            dwell_epochs=2,
+            calibration=CalibrationConfig(solid_frames=True),
+        )
+
+        # Patch sys.exit so validate_or_fail doesn't kill the test process
+        exit_calls = []
+        monkeypatch.setattr("sys.exit", lambda code=None: exit_calls.append(code) or None)
+
+        # Run — this should not call sys.exit(1)
+        validate_or_fail(profile)
+
+        assert exit_calls != [1], (
+            "validate_or_fail called sys.exit(1) on a config that should pass"
+        )
+
+    def test_cross_validate_cli_standalone_still_works(self):
+        """The standalone cross_validate CLI must still work."""
+        from superqr_desktop.v7_capacity_lab.cross_validate import (
+            validate_reference_profiles,
+        )
+        results = validate_reference_profiles()
+        assert len(results) == 14
+        assert all(r.passed for r in results)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # lab_renderer tests
 # ─────────────────────────────────────────────────────────────────────
 

@@ -2,6 +2,12 @@
 
 Before any physical experiment can start, Desktop must confirm the selected
 profile agrees with the protocol reference data. A mismatch must fail loudly.
+
+Profile name resolution: the Desktop lab may name profiles arbitrarily
+(e.g. "lab_40x40_..."), but cross-validation matches against canonical
+reference profiles by (grid_size, palette_name, seed) — the three
+parameters that determine the symbol matrix content. This keeps Desktop
+naming independent of the protocol reference identity.
 """
 
 from __future__ import annotations
@@ -157,18 +163,74 @@ def validate_reference_profiles() -> list[ValidationResult]:
 
 
 def validate_or_fail(profile) -> None:
-    """Validate a profile and exit with code 1 on any mismatch.
+    """Validate a user profile against canonical golden vectors and exit on failure.
 
-    Prints detailed pass/fail for each check.
+    The profile's user-facing name (e.g. "lab_40x40_...") is resolved to
+    the canonical reference profile by matching (grid_size, palette_name, seed).
+    If no canonical reference exists for the profile's parameters, fails
+    immediately rather than rendering unvalidated data.
     """
-    result = validate_profile(profile)
+    canonical = _resolve_canonical_or_fail(profile)
+
+    result = validate_profile(canonical)
     _print_result(result)
     if not result.passed:
         print(f"\nCROSS-VALIDATION FAILED for profile '{profile.name}'.")
+        print(f"  Canonical reference: '{canonical.name}'")
         print("Desktop output would not agree with protocol reference vectors.")
         print("Refusing to render potentially incompatible experimental data.")
         sys.exit(1)
     print(f"\nCross-validation PASSED for profile '{profile.name}'.")
+    print(f"  Matched canonical reference: '{canonical.name}'")
+
+
+def _resolve_canonical_or_fail(user_profile):
+    """Find the matching canonical reference profile, or fail hard.
+
+    Matching is by (grid_size, palette_name, seed) — the three parameters
+    that determine the symbol matrix content for the first data frame.
+    Dwell epochs, calibration config, and layout are not part of the
+    golden-vector identity.
+    """
+    profiles_mod = get_protocol_profiles()
+    reference_profiles = profiles_mod.build_reference_profiles()
+
+    for rp in reference_profiles:
+        if (rp.grid_size == user_profile.grid_size
+                and rp.palette_name == user_profile.palette_name
+                and rp.seed == user_profile.seed):
+            return rp
+
+    print(f"\nCROSS-VALIDATION FAILED for profile '{user_profile.name}'.")
+    print(f"  Grid:     {user_profile.grid_size}x{user_profile.grid_size}")
+    print(f"  Palette:  {user_profile.palette_name}")
+    print(f"  Seed:     {user_profile.seed}")
+    print()
+    print("No canonical reference vector exists for this (grid, palette, seed)")
+    print("combination. Available canonical reference configurations:")
+    for rp in reference_profiles:
+        print(f"  - {rp.name}")
+    print()
+    print("Physical Capacity Lab currently requires a canonical reference profile.")
+    print("Refusing to render unvalidated experimental data.")
+    sys.exit(1)
+
+
+def find_canonical_reference_profile(grid_size: int, palette_name: str, seed: int):
+    """Return the matching canonical reference profile, or None.
+
+    Exported for use by tests and other modules that need to resolve a
+    profile identity without triggering a hard failure.
+    """
+    profiles_mod = get_protocol_profiles()
+    reference_profiles = profiles_mod.build_reference_profiles()
+
+    for rp in reference_profiles:
+        if (rp.grid_size == grid_size
+                and rp.palette_name == palette_name
+                and rp.seed == seed):
+            return rp
+    return None
 
 
 def _print_result(result: ValidationResult) -> None:
