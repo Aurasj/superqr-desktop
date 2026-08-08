@@ -27,10 +27,11 @@ class V7SenderSession:
         self.session_id: int | None = None
         self.total_frames = 0
         self.current_frame_idx = 0
-        # Until per-frame FEC is enabled, 200 ms gives a 30 fps phone several
-        # independent observations of each optical frame. Faster presets remain
-        # available explicitly for capacity testing.
-        self.interval_ms = 200
+        # The supplied phone traces complete about 13-15 analyses/s. 100 ms keeps
+        # roughly one to two independent observations per optical frame while
+        # doubling goodput versus the conservative 200 ms bring-up default.
+        # Faster presets remain explicit capacity-test options.
+        self.interval_ms = 100
         self.profile: OpticalProfile = DEFAULT_PROFILE
 
     def _next_session_id(self) -> int:
