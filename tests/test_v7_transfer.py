@@ -77,7 +77,8 @@ def test_streaming_sender_reconstructs_exact_package(tmp_path):
     path.write_bytes(data)
     sender = V7SenderSession()
     sender.prepare_transfer(str(path))
-    assert sender.interval_ms == 67
+    assert sender.interval_ms == 200
+    assert sender.transfer_state == "SENDING"
     assert sender.total_frames >= 1
     payloads = []
     for frame_id in range(sender.total_frames):
