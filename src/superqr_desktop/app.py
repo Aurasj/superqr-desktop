@@ -166,7 +166,7 @@ class ControlApp:
         interval_row.pack(fill="x", pady=(6, 4))
         ttk.Label(interval_row, text="Frame Interval:").pack(side="left")
 
-        self.interval_combo = ttk.Combobox(interval_row, values=["50 ms", "100 ms", "200 ms", "500 ms"], state="readonly", width=10)
+        self.interval_combo = ttk.Combobox(interval_row, values=["50 ms", "67 ms", "75 ms", "100 ms", "200 ms", "500 ms"], state="readonly", width=10)
         self.interval_combo.set("100 ms")
         self.interval_combo.pack(side="left", padx=8)
         self.interval_combo.bind("<<ComboboxSelected>>", self._on_interval_selected)

@@ -81,7 +81,7 @@ def test_frame_index_wrapping():
 def test_interval_presets_and_default():
     session = V6SenderSession()
     assert session.interval_ms == 100
-    assert session.INTERVAL_PRESETS == [50, 100, 200, 500]
+    assert session.INTERVAL_PRESETS == [50, 67, 75, 100, 200, 500]
     
     session.set_interval(50)
     assert session.interval_ms == 50

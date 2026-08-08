@@ -7,7 +7,7 @@ from superqr_desktop.v6.transport import (
 )
 
 class V6SenderSession:
-    INTERVAL_PRESETS = [50, 100, 200, 500]
+    INTERVAL_PRESETS = [50, 67, 75, 100, 200, 500]
 
     def __init__(self):
         self.session_id_counter = 0
