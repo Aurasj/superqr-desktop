@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "protocol_version": 7,
+  "status": "EXPERIMENTAL_LOGICAL_MODEM_NOT_PHY_FROZEN",
+  "package": {"magic_ascii":"S7PK","version":1,"fixed_header_bytes":64,"compression_codecs":{"0":"NONE","1":"DEFLATE_RAW_LEVEL_1_BASELINE"},"max_filename_bytes":1024,"max_mime_bytes":255,"final_integrity":"SHA-256 of original uncompressed file"},
+  "logical_packet": {"magic_ascii":"SQM7","version":1,"header_bytes":32,"crc_bytes":4,"overhead_bytes":36,"flags":{"bit0":"SYSTEMATIC; must equal symbol_id < source_count"}},
+  "outer_fountain": {"codec_id":1,"name":"DENSE_XOR_V1","systematic":true,"max_source_symbols":256,"target_generation_bytes":131072},
+  "inner_fec": {"codec_id":1,"name":"SHORTENED_RS255_GF256_V1","field":"GF(256), primitive polynomial 0x11D, generator roots alpha^0..alpha^(parity-1)","default_parity_ratio":0.15,"experiment_parity_ratios":[0.1,0.15,0.2,0.25]},
+  "interleave": {"level":"byte","stride_rule":"smallest integer >= floor(channel_bytes/2)+1 that is coprime with channel_bytes"},
+  "phy_adapter": {"contract":"PHY supplies exact channel_bytes; modem has no grid/color/QR assumption."},
+  "freeze_gate": "Physical V7 carrier/profile and final on-screen wire remain unfrozen until the canonical real-phone campaign."
+}
