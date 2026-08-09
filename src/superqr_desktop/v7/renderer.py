@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pygame
 
+from superqr_desktop.contract.loader import load_contract
 from superqr_desktop.v7.profiles import EXTRA_PILOTS, PALETTES, PAYLOAD_BBOX, PROFILE_CODE_CELLS, OpticalProfile
-from superqr_desktop.v7_capacity_lab.protocol_bridge import load_v6_visual_contract
 
 CANONICAL_SIZE = 1000
 
@@ -16,15 +16,14 @@ def _hex_to_rgb(value: str) -> tuple[int, int, int]:
 class V7TransferRenderer:
     """Fast dense renderer for production V7 transfer frames.
 
-    Reuses the proven V6 acquisition geometry, but expands the payload to the
-    full safe rectangle between top and bottom anchors. Profile bits and extra
-    color pilots live in the unused header strip.
+    Reuses the proven packaged V6 acquisition geometry, but production transfer
+    code intentionally does not depend on the Capacity Lab package.
     """
 
     def __init__(self, marker_size: int, profile: OpticalProfile):
         self.marker_size = marker_size
         self.profile = profile
-        self.contract = load_v6_visual_contract()
+        self.contract, _ = load_contract()
         self._scale = marker_size / CANONICAL_SIZE
         self._carrier = self._build_carrier()
         self.cached_frame_display: pygame.Surface | None = None
@@ -79,8 +78,6 @@ class V7TransferRenderer:
         pygame.draw.rect(canonical, palette["BLACK"], pygame.Rect(*self._canonical_rect(sync["SYNC_0"]["bbox"])))
         pygame.draw.rect(canonical, palette["WHITE"], pygame.Rect(*self._canonical_rect(sync["SYNC_1"]["bbox"])))
 
-        # Additional persistent pilots for 8-color profiles. They are harmless in
-        # 4-color mode and let Android calibrate all eight symbols immediately.
         extra_colors = {
             "GREEN": "#00FF00",
             "YELLOW": "#FFFF00",
@@ -90,8 +87,6 @@ class V7TransferRenderer:
         for name, bbox in EXTRA_PILOTS.items():
             pygame.draw.rect(canonical, _hex_to_rgb(extra_colors[name]), pygame.Rect(*self._canonical_rect(bbox)))
 
-        # Four robust monochrome cells announce the optical profile. Android can
-        # therefore switch density/palette automatically after geometry lock.
         for bit_index, bbox in enumerate(PROFILE_CODE_CELLS):
             bit = (self.profile.id >> (3 - bit_index)) & 1
             color = (255, 255, 255) if bit else (0, 0, 0)
