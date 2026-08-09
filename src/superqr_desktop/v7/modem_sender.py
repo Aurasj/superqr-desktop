@@ -28,6 +28,7 @@ class V7ModemSender:
     def _initial_symbol_count(self,plan:GenerationPlan)->int:return plan.source_count+max(8,int(plan.source_count*self.initial_repair_fraction+.999))
     def _load_generation(self,index:int)->None:
         if index==self._loaded_generation:return
+        if self.source.stored_path==self.source.source_path:self.source.assert_source_unchanged()
         p=self.plans[index];payload=self.source.read_at(p.offset,p.payload_len)
         if len(payload)!=p.payload_len:raise IOError("package generation read was short")
         symbols=[]
