@@ -1,56 +1,60 @@
-# SuperQR Desktop (V6)
+# SuperQR Desktop
 
-Standalone Python desktop application for rendering V6 SuperQR optical markers on screen for optical transmission testing.
+SuperQR Desktop is the sender for offline screen-to-camera file transfer.
 
-## Features
-- **V6 Static Optical Marker Renderer**: Renders outer border, 4 corner identity anchors, 4 calibration pilots, tracking blocks, sync cells, and 20x20 data grid.
-- **Validation Modes**:
-  - All-Black Grid
-  - All-White Grid
-  - Four-Color Checkerboard
-  - Deterministic Random Grid (Xorshift32 seed 42)
-- **Display Selection**: Fullscreen / Windowed display targeting on multiple monitors.
+The product UI is **V7 only**. The physically validated V6 visual carrier remains packaged as the acquisition/debug foundation, but there is no separate V6/V7 application mode.
 
-## Installation & Running
+## Current V7 baseline
+
+- adaptive optical profiles (40/48/56/64+ grids, 4- and experimental 8-color palettes);
+- current reliable measurement default: **40×40 / 4 colors / 100 ms**;
+- V6-proven outer carrier, anchors, pilots and geometry;
+- profile ID announced optically so Android AUTO can follow the sender;
+- streaming file slicing instead of precomputing the full optical carousel;
+- CRC32-protected current pre-FEC transport;
+- V7.0 sender presentation telemetry with measured cadence and JSON export.
+
+Higher-density and 8-color profiles are experiments, not universal speed claims.
+
+## Run
 
 ```bash
 pip install -e .
+superqr-desktop
+```
+
+or:
+
+```bash
 python -m superqr_desktop.app
 ```
 
-## V6 Sender (FROZEN)
+Selecting a file starts the current transfer carousel immediately. `START / RESTART` restarts it explicitly.
 
-The V6 sender behavior is frozen. No new pacing presets, adaptive timing, or coding-architecture changes will be accepted in V6. Future adaptive pacing and new coding architectures belong to V7.
+## Measurement terminology
 
-### Frame pacing presets
+The LIVE panel deliberately separates:
 
-| Preset (ms) | Notes |
-|---|---|
-| **100** | Conservative default — reliable baseline across varied hardware. |
-| 200 / 500 | Slower presets for debugging or constrained receivers. |
-| 75 | Slightly slower than 67 but robust on the current dev-phone/display setup. |
-| 67 | Best observed throughput on the current dev-phone/display setup. |
-| 50 | Produced a larger completion tail; not recommended as a default. |
+- configured/nominal logical FPS;
+- measured presentation-completion FPS;
+- theoretical raw/payload ceilings.
 
-The 67 ms and 75 ms presets exist because they performed well on the specific development phone and display used for benchmarking. These are **setup-specific observations**, not universal timing requirements. Actual optimal pacing depends on:
+Theoretical rate is **not** actual file goodput. Receiver-side camera FPS, analysis FPS, useful decoded FPS and completed-file goodput are separate measurements defined by the protocol V7.0 measurement contract.
 
-- Display refresh rate and frame-buffer scan-out
-- Camera sensor cadence and exposure duration
-- Rolling-shutter artifacts
-- Receiver-side decode pipeline latency
+Use **Export metrics JSON** to save the Desktop side of a benchmark run.
 
-### Sender loop
+## Advanced carrier debug
 
-The sender cycles logical frames indefinitely while in the SENDING state (`current_frame_idx = (idx + 1) % total_frames`). V6 requires every logical frame to be displayed at least once, so the sender loops rather than stopping after one pass.
+The Advanced section renders V6 carrier diagnostic patterns only. It is not a second protocol/product mode.
 
-### Timing
+## V6 status
 
-- Frame advance is driven by `time.monotonic()` in the application loop.
-- Each rendered frame persists on screen until the next logical advance.
-- `pygame.display.flip()` is called once per logical frame advance — no mid-frame flips.
+V6 remains frozen in protocol history as the validated compatibility/reference release. New transport, FEC, timing, compression and adaptive-PHY work belongs to V7 and later.
 
-## Running Tests
+## Tests
 
 ```bash
 pytest
 ```
+
+CI also builds the wheel/sdist and verifies packaged V6/V7 resources without requiring a sibling `superqr-protocol` checkout.
