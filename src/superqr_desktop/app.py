@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import traceback
 import tkinter as tk
@@ -8,10 +9,11 @@ from tkinter import filedialog, messagebox, ttk
 import pygame
 
 from superqr_desktop.contract.loader import load_contract
-from superqr_desktop.v6.display import CANONICAL_SIZE, DisplayController
+from superqr_desktop.v6.display import DisplayController
 from superqr_desktop.v7.profiles import DEFAULT_PROFILE, PROFILES, BY_LABEL
 from superqr_desktop.v7.renderer import V7TransferRenderer
 from superqr_desktop.v7.sender import V7SenderSession
+from superqr_desktop.v7.telemetry import PresentationTelemetry
 
 SIZE_PRESETS = [1000, 900, 800, 700, 600, 500, 400]
 DEBUG_PATTERNS = [
@@ -42,11 +44,12 @@ class ControlApp:
         self.sender.profile = DEFAULT_PROFILE
         self.sender_last_tick = 0.0
         self.v7_renderer: V7TransferRenderer | None = None
+        self.telemetry = PresentationTelemetry()
 
         self.root = tk.Tk()
         self.root.title("SuperQR")
-        self.root.geometry("570x760")
-        self.root.minsize(540, 700)
+        self.root.geometry("570x790")
+        self.root.minsize(540, 720)
         self.root.configure(bg="#11131a")
 
         self.style = ttk.Style()
@@ -160,7 +163,7 @@ class ControlApp:
         self.btn_next = ttk.Button(nav, text="Next ▶", command=self.next_frame)
         self.btn_next.pack(side="left", expand=True, fill="x", padx=(4, 0))
 
-        live = self._card(main, "LIVE")
+        live = self._card(main, "LIVE / MEASUREMENT")
         row = ttk.Frame(live, style="Card.TFrame")
         row.pack(fill="x")
         self.lbl_status = ttk.Label(row, text="READY", style="Card.TLabel", font=("Segoe UI", 10, "bold"))
@@ -169,9 +172,14 @@ class ControlApp:
         self.lbl_link.pack(side="right")
         self.lbl_display = ttk.Label(live, text="Display: -", style="Muted.TLabel")
         self.lbl_display.pack(anchor="w", pady=(5, 0))
+        self.lbl_timing = ttk.Label(live, text="Present: waiting", style="Muted.TLabel")
+        self.lbl_timing.pack(anchor="w", pady=(2, 0))
         self.lbl_last_err = ttk.Label(live, text="Last error: none", style="Muted.TLabel")
         self.lbl_last_err.pack(anchor="w", pady=(2, 0))
-        ttk.Button(live, text="Copy diagnostics", command=self.copy_diagnostics).pack(fill="x", pady=(8, 0))
+        row = ttk.Frame(live, style="Card.TFrame")
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Button(row, text="Copy diagnostics", command=self.copy_diagnostics).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ttk.Button(row, text="Export metrics JSON", command=self.export_metrics).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         ttk.Checkbutton(main, text="Advanced / V6 carrier debug", variable=self.show_debug_var, command=self._toggle_debug).pack(anchor="w", pady=(6, 0))
         self.debug_frame = ttk.Frame(main, style="Card.TFrame", padding=10)
@@ -189,6 +197,9 @@ class ControlApp:
         else:
             self.debug_frame.pack_forget()
 
+    def _reset_measurement(self):
+        self.telemetry.reset()
+
     def _selected_display_index(self) -> int:
         label = self.selected_display_str.get()
         found = next((d for d in self.detected_displays if d["label"] == label), None)
@@ -205,6 +216,7 @@ class ControlApp:
             self.sender.stop_transfer()
             self.sender.set_profile(BY_LABEL[self.profile_var.get()])
             self.v7_renderer = None
+            self._reset_measurement()
             if self.sender.total_frames:
                 self.sender_last_tick = time.monotonic()
                 self._render_current_transfer_frame()
@@ -216,6 +228,7 @@ class ControlApp:
         try:
             self.sender.set_interval(int(self.interval_combo.get().replace(" ms", "")))
             self.sender_last_tick = time.monotonic()
+            self._reset_measurement()
             self._update_sender_ui()
         except ValueError:
             pass
@@ -233,6 +246,7 @@ class ControlApp:
             canvas = self.display_controller.screen.get_size()
             self.lbl_display.config(text=f"Display {canvas[0]}×{canvas[1]} • marker {self.display_controller.marker_size}px • carrier active {metrics.active_width}×{metrics.active_height}")
             self.renderer_status = "READY"
+            self._reset_measurement()
             if self.sender.total_frames:
                 self._render_current_transfer_frame()
             else:
@@ -247,9 +261,9 @@ class ControlApp:
             return
         try:
             self.sender.prepare_transfer(path)
-            # prepare_transfer enters SENDING immediately. Start the dwell clock at
-            # the moment frame 0 is actually presented so the first frame gets the
-            # full configured interval instead of being advanced instantly.
+            self._reset_measurement()
+            # Start the dwell clock at the moment frame 0 is actually presented so
+            # the first frame gets the full configured interval.
             self.sender_last_tick = time.monotonic()
             self._render_current_transfer_frame()
             self._update_sender_ui()
@@ -261,6 +275,7 @@ class ControlApp:
             messagebox.showwarning("SuperQR", "Select a file first.")
             return
         if self.sender.start_transfer():
+            self._reset_measurement()
             self.sender_last_tick = time.monotonic()
             self._render_current_transfer_frame()
             self._update_sender_ui()
@@ -280,8 +295,10 @@ class ControlApp:
     def show_frame(self):
         if self.sender.total_frames:
             self._render_current_transfer_frame()
+            self._update_sender_ui()
 
     def _render_current_transfer_frame(self):
+        started_ns = time.perf_counter_ns()
         self._ensure_renderer()
         symbols = self.sender.get_frame_symbols()
         self.v7_renderer.prepare_symbols(symbols)
@@ -293,7 +310,17 @@ class ControlApp:
         marker = self.display_controller.marker_size
         screen.fill((8, 10, 14))
         screen.blit(surface, ((cw - marker) // 2, (ch - marker) // 2))
+        flip_started_ns = time.perf_counter_ns()
         pygame.display.flip()
+        completed_ns = time.perf_counter_ns()
+        if self.sender.total_frames:
+            self.telemetry.record_present(
+                frame_id=self.sender.current_frame_idx,
+                configured_interval_ms=self.sender.interval_ms,
+                render_prepare_ms=(flip_started_ns - started_ns) / 1_000_000.0,
+                display_flip_ms=(completed_ns - flip_started_ns) / 1_000_000.0,
+                now_ns=time.monotonic_ns(),
+            )
 
     def render_debug_pattern(self):
         self.sender.stop_transfer()
@@ -303,12 +330,52 @@ class ControlApp:
         except Exception as exc:
             self._set_error(exc)
 
+    def _measurement_payload(self) -> dict:
+        p = self.sender.profile
+        snap = self.telemetry.snapshot()
+        nominal_fps = 1000.0 / self.sender.interval_ms
+        snap.update({
+            "timestamp_ms": int(time.time() * 1000),
+            "role": "desktop_sender",
+            "profile_id": p.id,
+            "profile_key": p.key,
+            "grid": p.grid,
+            "colors": p.color_count,
+            "frame_bytes": p.frame_size,
+            "payload_bytes": p.payload_size,
+            "configured_interval_ms": self.sender.interval_ms,
+            "nominal_logical_fps": nominal_fps,
+            "theoretical_raw_kib_s": p.raw_kib_s(self.sender.interval_ms),
+            "theoretical_payload_kib_s": p.payload_kib_s(self.sender.interval_ms),
+            "total_frames": self.sender.total_frames,
+            "session_id": self.sender.session_id,
+            "transfer_state": self.sender.transfer_state,
+            "display": self.selected_display_str.get(),
+            "marker_px": self.selected_size_var.get(),
+            "window_mode": self.window_mode_var.get(),
+            "file": self.sender.filename,
+            "file_size": self.sender.file_size,
+            "last_error": self.last_error,
+        })
+        return snap
+
     def _update_sender_ui(self):
         p = self.sender.profile
         self.profile_var.set(p.label)
         self.lbl_profile_detail.config(text=f"{p.frame_size} B/frame • cell {p.cell_width:.1f}×{p.cell_height:.1f}px @ 1000")
         fps = 1000.0 / self.sender.interval_ms
-        self.lbl_link.config(text=f"{fps:.1f} fps • payload ≤ {p.payload_kib_s(self.sender.interval_ms):.2f} KiB/s")
+        self.lbl_link.config(text=f"cfg {fps:.1f} fps • theoretical payload ≤ {p.payload_kib_s(self.sender.interval_ms):.2f} KiB/s")
+        timing = self.telemetry.snapshot()
+        if timing["present_count"] >= 2:
+            self.lbl_timing.config(
+                text=(
+                    f"Present {timing['present_measured_fps']:.2f} fps • "
+                    f"interval avg {timing['present_interval_ms_mean']:.1f} ms • "
+                    f"p95 {timing['present_interval_ms_p95']:.1f} ms • late {timing['late_present_count']}"
+                )
+            )
+        else:
+            self.lbl_timing.config(text=f"Present: {timing['present_count']} sample • run {str(timing['run_id'])[:8]}")
         if self.sender.filename:
             self.lbl_sender_file.config(text=f"{self.sender.filename}  •  {self.sender.mime_type}")
             self.lbl_sender_meta.config(text=f"{self.sender.file_size:,} B • package {self.sender.package_size:,} B • CRC32 {self.sender.file_crc32:08X}")
@@ -340,27 +407,43 @@ class ControlApp:
             messagebox.showerror(title, self.last_error)
 
     def copy_diagnostics(self):
-        p = self.sender.profile
+        m = self._measurement_payload()
         diag = (
-            "SuperQR V7 diagnostics\n"
-            "=======================\n"
-            f"Profile: {p.key} (id {p.id})\n"
-            f"Grid: {p.grid}x{p.grid}\n"
-            f"Palette: {p.palette_name} ({p.color_count} colors, {p.bits_per_cell} bits/cell)\n"
-            f"Payload bbox: 100,190 -> 900,810\n"
-            f"Frame: {p.frame_size} bytes; payload: {p.payload_size} bytes\n"
-            f"Cell canonical: {p.cell_width:.2f} x {p.cell_height:.2f}\n"
-            f"Interval: {self.sender.interval_ms} ms\n"
-            f"Raw: {p.raw_kib_s(self.sender.interval_ms):.2f} KiB/s\n"
-            f"Payload max: {p.payload_kib_s(self.sender.interval_ms):.2f} KiB/s\n"
-            f"Display: {self.selected_display_str.get()}\n"
-            f"Marker: {self.selected_size_var.get()} px\n"
-            f"File: {self.sender.filename or '-'}\n"
-            f"Session: {self.sender.session_id or '-'}\n"
-            f"Last error: {self.last_error}\n"
+            "SuperQR V7 measurement diagnostics\n"
+            "===================================\n"
+            f"Run: {m['run_id']}\n"
+            f"Profile: {m['profile_key']} (id {m['profile_id']})\n"
+            f"Grid/colors: {m['grid']}x{m['grid']} / {m['colors']}\n"
+            f"Configured: {m['configured_interval_ms']} ms = {m['nominal_logical_fps']:.3f} nominal fps\n"
+            f"Measured present: {m['present_measured_fps']:.3f} fps over {m['present_count']} presents\n"
+            f"Intervals ms: last {m['present_interval_ms_last']:.3f}; mean {m['present_interval_ms_mean']:.3f}; "
+            f"min {m['present_interval_ms_min']:.3f}; max {m['present_interval_ms_max']:.3f}; p95 {m['present_interval_ms_p95']:.3f}\n"
+            f"Late presents: {m['late_present_count']}\n"
+            f"Render/flip last: {m['render_prepare_ms_last']:.3f} / {m['display_flip_ms_last']:.3f} ms\n"
+            f"Theoretical raw: {m['theoretical_raw_kib_s']:.3f} KiB/s\n"
+            f"Theoretical payload ceiling: {m['theoretical_payload_kib_s']:.3f} KiB/s\n"
+            f"Display: {m['display']} • marker {m['marker_px']} px • {m['window_mode']}\n"
+            f"File/session: {m['file'] or '-'} / {m['session_id'] or '-'}\n"
+            f"Last error: {m['last_error']}\n"
         )
         self.root.clipboard_clear(); self.root.clipboard_append(diag)
-        messagebox.showinfo("SuperQR", "Diagnostics copied.")
+        messagebox.showinfo("SuperQR", "Measurement diagnostics copied.")
+
+    def export_metrics(self):
+        path = filedialog.asksaveasfilename(
+            title="Export SuperQR V7 metrics",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            initialfile=f"superqr-desktop-{self.telemetry.run_id[:8]}.json",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(self._measurement_payload(), fh, indent=2, sort_keys=True)
+            messagebox.showinfo("SuperQR", "Measurement JSON exported.")
+        except Exception as exc:
+            self._set_error(exc, "Could not export metrics")
 
     def run(self):
         while True:
