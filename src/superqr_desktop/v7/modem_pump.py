@@ -22,7 +22,7 @@ class ModemPumpSnapshot:
 class V7ModemFramePump:
     """Single-producer bounded prefetch queue for display/presentation adapters.
 
-    The worker owns calls to ``next_physical_frame`` so RS/fountain work is done
+    The worker owns calls to ``next_addressed_frame`` so RS/fountain work is done
     ahead of the display deadline. The queue is deliberately tiny and bounded;
     it never grows with file size. The presentation thread only dequeues already
     encoded fixed-size channel frames.
@@ -50,13 +50,7 @@ class V7ModemFramePump:
     def _run(self) -> None:
         try:
             while not self._stop.is_set():
-                before = self.sender.snapshot()
-                frame = self.sender.next_physical_frame()
-                after = self.sender.snapshot()
-                generation_id = after.last_generation_id
-                symbol_id = after.last_symbol_id
-                if generation_id is None or symbol_id is None:
-                    raise RuntimeError("sender did not expose generated frame identity")
+                generation_id, symbol_id, frame = self.sender.next_addressed_frame()
                 pumped = PumpedChannelFrame(generation_id, symbol_id, frame)
                 while not self._stop.is_set():
                     try:
