@@ -9,7 +9,12 @@ from superqr_desktop.v7_capacity_lab import protocol_bridge
 from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
 from superqr_desktop.v7_capacity_lab.lab_display import LabDisplayController
 from superqr_desktop.v7_capacity_lab.analysis import analyze_records
-from superqr_desktop.v7_capacity_lab.campaign import build_campaign
+from superqr_desktop.v7_capacity_lab.campaign import (
+    CampaignState,
+    Phase1CampaignPresenter,
+    RunSpec,
+    build_campaign,
+)
 from superqr_desktop.v7_capacity_lab.phase1_profiles import (
     GridFrameSequence,
     build_run_envelope,
@@ -158,6 +163,29 @@ def test_physical_lab_ui_exposes_required_controls():
     source = inspect.getsource(PhyLabWindow)
     for label in ("CAMPAIGN", "DISPLAY", "RUN CONTROL", "START CAMPAIGN", "STOP", "Analyze receiver JSONL"):
         assert label in source
+
+
+def test_grid_campaign_runs_ready_running_done_without_manual_input():
+    presenter = Phase1CampaignPresenter(
+        [RunSpec("mono_64x50_matched", 3, 1)], display_index=0,
+        fullscreen=False, marker_size=600, ready_seconds=0.0, done_seconds=0.0,
+        first_run_token=0x1234,
+    )
+    try:
+        presenter.start()
+        assert presenter.snapshot().state == CampaignState.READY
+        assert presenter.tick()
+        assert presenter.snapshot().state == CampaignState.RUNNING
+        for _ in range(4):
+            presenter.last_advance -= 1.0
+            assert presenter.tick()
+            if presenter.snapshot().state == CampaignState.DONE:
+                break
+        snapshot = presenter.snapshot()
+        assert snapshot.state == CampaignState.DONE
+        assert snapshot.run_token == 0x1234
+    finally:
+        presenter.stop()
 
 
 def test_log_analysis_excludes_rejected_frames_and_flags_frame_zero_wait():

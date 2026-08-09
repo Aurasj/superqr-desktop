@@ -8,7 +8,16 @@ from pathlib import Path
 
 
 def analyze_records(records: list[dict]) -> dict:
-    scored = [record for record in records if record.get("scored", True)]
+    def is_scored(record: dict) -> bool:
+        if "scored" in record:
+            return bool(record["scored"])
+        return not (
+            int(record.get("valid_samples", 1)) == 0
+            and int(record.get("observed_bits", 0)) > 0
+            and int(record.get("erased_bits", 0)) >= int(record.get("observed_bits", 0))
+        )
+
+    scored = [record for record in records if is_scored(record)]
     observed = sum(int(record.get("observed_bits", 0)) for record in scored)
     erased = sum(int(record.get("erased_bits", 0)) for record in scored)
     errors = sum(int(record.get("bit_errors", 0)) for record in scored)
