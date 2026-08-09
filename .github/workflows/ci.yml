@@ -81,6 +81,13 @@ jobs:
           from superqr_desktop.app import main
           print('7. superqr_desktop.app imported OK')
 
+          # 8. Phase 1 PHY artifact is present in the installed wheel
+          from superqr_desktop.v7_capacity_lab.protocol_bridge import load_phy_selection_manifest
+          phase1 = load_phy_selection_manifest()
+          assert len(phase1['grid_profiles']) == 5
+          assert len(phase1['qr_controls']) == 2
+          print('8. V7 Phase 1 PHY artifact packaged OK')
+
           print()
           print('All packaged wheel smoke checks passed.')
           "
