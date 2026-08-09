@@ -74,6 +74,20 @@ python -m superqr_desktop.app
 
 Selecting a file starts the current transfer carousel immediately. `START / RESTART` restarts it explicitly.
 
+## V7 Phase 1 PHY laboratory
+
+The laboratory transmitter is separate from the production V7 sender:
+
+```powershell
+superqr-phy-lab --list
+superqr-phy-lab --profile mono_64x50_matched --dwell 3 --frames 256
+superqr-phy-lab --profile qr_v27_l_safe --frames 256
+```
+
+Profiles and deterministic vectors come from the canonical
+`superqr-protocol/test-vectors/v7-phy-selection/phase1_manifest.json`. Running
+the lab does not select or change the production V7 wire format.
+
 ## Measurement terminology
 
 The LIVE panel deliberately separates:

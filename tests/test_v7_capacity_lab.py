@@ -7,6 +7,15 @@ import pygame
 
 from superqr_desktop.v7_capacity_lab import protocol_bridge
 from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
+from superqr_desktop.v7_capacity_lab.phase1_profiles import (
+    GridFrameSequence,
+    build_qr_control_payload,
+    build_qr_matrix,
+    encode_frame_index_strip,
+    qr_controls,
+    validate_grid_vectors,
+    validate_qr_vectors,
+)
 
 
 def test_protocol_bridge_accessors_are_available():
@@ -66,3 +75,42 @@ def test_debug_patterns_still_use_frozen_v6_carrier():
 
     values = {value for _, value in app.DEBUG_PATTERNS}
     assert values == {"deterministic_random", "checkerboard", "black", "white"}
+
+
+def test_phase1_manifest_and_vectors_are_packaged_and_valid():
+    manifest = protocol_bridge.load_phy_selection_manifest()
+    assert manifest["status"] == "LAB_ONLY_NOT_A_V7_WIRE_CONTRACT"
+    assert len(manifest["grid_profiles"]) == 5
+    assert len(manifest["qr_controls"]) == 2
+    validate_grid_vectors()
+    validate_qr_vectors()
+
+
+def test_rectangular_monochrome_frame_and_index_strip():
+    sequence = GridFrameSequence("mono_64x50_matched")
+    frame_index, matrix = sequence.next_frame()
+    assert frame_index == 0
+    assert (matrix.cols, matrix.rows) == (64, 50)
+    assert encode_frame_index_strip(0xA5) == [1, 0, 1, 0, 0, 1, 0, 1] * 3
+
+    pygame.init()
+    try:
+        renderer = LabRenderer(marker_size=800)
+        manifest = protocol_bridge.load_phy_selection_manifest()
+        renderer.prepare_logical_frame(
+            matrix,
+            payload_bbox=manifest["payload_bbox"],
+            frame_index_bits=encode_frame_index_strip(frame_index),
+            frame_index_bbox=manifest["frame_index_strip"]["bbox"],
+        )
+        assert renderer.cached_frame_display is not None
+    finally:
+        pygame.quit()
+
+
+def test_qr_controls_use_exact_capacity_and_version():
+    for control in qr_controls().values():
+        payload = build_qr_control_payload(control, 0)
+        assert len(payload) == control["frame_bytes"]
+        matrix = build_qr_matrix(control, 0)
+        assert len(matrix) == control["module_count"]

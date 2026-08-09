@@ -26,6 +26,7 @@ _protocol_root: Path | None = None
 _protocol_available: bool | None = None
 _reference_vectors_cache: dict | None = None
 _v6_contract_cache: dict | None = None
+_phy_selection_manifest_cache: dict | None = None
 
 
 # ── Path resolution ──────────────────────────────────────────────────────
@@ -103,6 +104,20 @@ def load_v6_visual_contract() -> dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
             _v6_contract_cache = json.load(f)
     return _v6_contract_cache
+
+
+def load_phy_selection_manifest() -> dict[str, Any]:
+    """Load the canonical laboratory-only Phase 1 PHY manifest."""
+    global _phy_selection_manifest_cache
+    if _phy_selection_manifest_cache is None:
+        root = get_protocol_root()
+        if root is not None:
+            path = root / "test-vectors" / "v7-phy-selection" / "phase1_manifest.json"
+        else:
+            path = _get_data_dir() / "phase1_manifest.json"
+        with open(path, "r", encoding="utf-8") as f:
+            _phy_selection_manifest_cache = json.load(f)
+    return _phy_selection_manifest_cache
 
 
 # ── Module access (local or protocol repo) ────────────────────────────────

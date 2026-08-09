@@ -17,6 +17,7 @@ import pygame
 
 from superqr_desktop.v7_capacity_lab.protocol_bridge import (
     load_v6_visual_contract,
+    load_phy_selection_manifest,
     get_protocol_geometry,
     get_protocol_palettes,
 )
@@ -173,7 +174,13 @@ class LabRenderer:
         h = int((payload_bbox[3] - payload_bbox[1]) * self._marker_scale)
         return pygame.Rect(x, y, w, h)
 
-    def prepare_logical_frame(self, symbol_matrix) -> None:
+    def prepare_logical_frame(
+        self,
+        symbol_matrix,
+        payload_bbox=None,
+        frame_index_bits: list[int] | None = None,
+        frame_index_bbox=None,
+    ) -> None:
         """Build and cache the display frame for a new logical frame.
 
         Called once per logical frame change, not per refresh.
@@ -184,11 +191,13 @@ class LabRenderer:
         """
         t_start = time.perf_counter_ns()
 
-        palette_mod = get_protocol_palettes()
-        palette = palette_mod.get_palette(symbol_matrix.palette_name)
-
-        # Build rgb lookup from palette color_map
-        rgb_lookup = {idx: _hex_to_rgb(hex_str) for idx, hex_str in palette.color_map.items()}
+        if symbol_matrix.palette_name in load_phy_selection_manifest()["palettes"]:
+            colors = load_phy_selection_manifest()["palettes"][symbol_matrix.palette_name]["colors"]
+            rgb_lookup = {idx: _hex_to_rgb(hex_str) for idx, hex_str in enumerate(colors)}
+        else:
+            palette_mod = get_protocol_palettes()
+            palette = palette_mod.get_palette(symbol_matrix.palette_name)
+            rgb_lookup = {idx: _hex_to_rgb(hex_str) for idx, hex_str in palette.color_map.items()}
 
         # 1. Symbol matrix → RGB byte buffer
         t1 = time.perf_counter_ns()
@@ -210,9 +219,10 @@ class LabRenderer:
         t3 = time.perf_counter_ns()
 
         # 3. Scale directly to display payload rect (single scale, nearest-neighbor)
-        geo_mod = get_protocol_geometry()
-        geom = geo_mod.build_geometry(max(grid_w, grid_h))
-        display_payload_rect = self._compute_display_payload_rect(geom.payload_bbox)
+        if payload_bbox is None:
+            geo_mod = get_protocol_geometry()
+            payload_bbox = geo_mod.build_geometry(max(grid_w, grid_h)).payload_bbox
+        display_payload_rect = self._compute_display_payload_rect(payload_bbox)
         payload_scaled = pygame.transform.scale(native_surf,
                                                  (display_payload_rect.width,
                                                   display_payload_rect.height))
@@ -221,6 +231,10 @@ class LabRenderer:
         # 4. Compose: copy cached carrier, blit payload
         frame = self._carrier_display.copy()
         frame.blit(payload_scaled, (display_payload_rect.x, display_payload_rect.y))
+        if frame_index_bits is not None:
+            if frame_index_bbox is None:
+                raise ValueError("frame_index_bbox is required with frame_index_bits")
+            self._draw_bit_strip(frame, frame_index_bits, frame_index_bbox)
         t5 = time.perf_counter_ns()
 
         self._cached_frame = frame
@@ -231,3 +245,57 @@ class LabRenderer:
         self.timings.payload_scale_us = (t4 - t3) // 1000
         self.timings.compose_us = (t5 - t4) // 1000
         self.timings.total_prepare_us = (t5 - t_start) // 1000
+
+    def _draw_bit_strip(self, frame: pygame.Surface, bits: list[int], bbox) -> None:
+        if not bits:
+            raise ValueError("bit strip must not be empty")
+        rect = self._compute_display_payload_rect(bbox)
+        for index, bit in enumerate(bits):
+            x1 = rect.x + round(index * rect.width / len(bits))
+            x2 = rect.x + round((index + 1) * rect.width / len(bits))
+            pygame.draw.rect(
+                frame,
+                (255, 255, 255) if bit else (0, 0, 0),
+                pygame.Rect(x1, rect.y, max(1, x2 - x1), rect.height),
+            )
+
+    def prepare_qr_matrix(self, matrix: tuple[bytes, ...], quiet_zone: int = 4) -> None:
+        """Prepare a standard QR control with exact integer module scaling."""
+        native = self.build_qr_native_surface(matrix, quiet_zone)
+        self.prepare_qr_native_surface(native)
+
+    def build_qr_native_surface(
+        self,
+        matrix: tuple[bytes, ...],
+        quiet_zone: int = 4,
+    ) -> pygame.Surface:
+        """Build a compact QR surface once, outside the presentation loop."""
+        modules = len(matrix)
+        if modules < 1 or any(len(row) != modules for row in matrix):
+            raise ValueError("QR matrix must be square")
+        total = modules + 2 * quiet_zone
+        buf = bytearray([255]) * (total * total * 3)
+        for row, values in enumerate(matrix):
+            for col, value in enumerate(values):
+                if value:
+                    offset = ((row + quiet_zone) * total + col + quiet_zone) * 3
+                    buf[offset:offset + 3] = b"\x00\x00\x00"
+        return pygame.image.frombytes(bytes(buf), (total, total), "RGB")
+
+    def prepare_qr_native_surface(self, native: pygame.Surface) -> None:
+        """Scale and center an already-encoded compact QR surface."""
+        t_start = time.perf_counter_ns()
+        total = native.get_width()
+        if total != native.get_height():
+            raise ValueError("native QR surface must be square")
+        scale = self.marker_size // total
+        if scale < 1:
+            raise ValueError("marker is too small for the QR matrix")
+        rendered = total * scale
+        scaled = pygame.transform.scale(native, (rendered, rendered))
+        frame = pygame.Surface((self.marker_size, self.marker_size))
+        frame.fill((255, 255, 255))
+        offset = (self.marker_size - rendered) // 2
+        frame.blit(scaled, (offset, offset))
+        self._cached_frame = frame
+        self.timings.total_prepare_us = (time.perf_counter_ns() - t_start) // 1000
