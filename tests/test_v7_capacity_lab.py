@@ -90,10 +90,47 @@ def test_debug_patterns_still_use_frozen_v6_carrier():
 def test_phase1_manifest_and_vectors_are_packaged_and_valid():
     manifest = protocol_bridge.load_phy_selection_manifest()
     assert manifest["status"] == "LAB_ONLY_NOT_A_V7_WIRE_CONTRACT"
+    assert manifest["schema_version"] == 3
+    assert manifest["acquisition_carrier"]["status"] == "LAB_ONLY_NOT_PRODUCTION_V7_GEOMETRY"
     assert len(manifest["grid_profiles"]) == 5
     assert len(manifest["qr_controls"]) == 2
     validate_grid_vectors()
     validate_qr_vectors()
+
+
+def test_v7_lab_carrier_renders_manifest_geometry_exactly():
+    pygame.init()
+    try:
+        manifest = protocol_bridge.load_phy_selection_manifest()
+        profile = GridFrameSequence("mono_64x50_matched")
+        frame_index, matrix = profile.next_frame()
+        envelope = build_run_envelope("mono_64x50_matched", 0xC570, frame_index, 32, 3)
+        renderer = LabRenderer(marker_size=1000)
+        renderer.prepare_logical_frame(
+            matrix,
+            payload_bbox=manifest["payload_bbox"],
+            sync_bits=envelope.bits(),
+            sync_bboxes=(manifest["run_sync"]["top_bbox"], manifest["run_sync"]["bottom_bbox"]),
+            sync_rows=manifest["run_sync"]["rows"],
+            sync_cols=manifest["run_sync"]["cols"],
+        )
+        surface = renderer.cached_frame_display
+        assert surface is not None
+        # Continuous border: white outside, black band, white inside.
+        assert surface.get_at((49, 500))[:3] == (255, 255, 255)
+        assert surface.get_at((50, 500))[:3] == (0, 0, 0)
+        assert surface.get_at((69, 500))[:3] == (0, 0, 0)
+        assert surface.get_at((70, 500))[:3] == (255, 255, 255)
+        # Standard nested TL finder and both duplicated optical sync bands.
+        assert surface.get_at((80, 80))[:3] == (0, 0, 0)
+        assert surface.get_at((100, 100))[:3] == (255, 255, 255)
+        assert surface.get_at((116, 116))[:3] == (0, 0, 0)
+        first_bit = envelope.bits()[0]
+        expected = (255, 255, 255) if first_bit else (0, 0, 0)
+        assert surface.get_at((207, 152))[:3] == expected
+        assert surface.get_at((207, 832))[:3] == expected
+    finally:
+        pygame.quit()
 
 
 def test_rectangular_monochrome_frame_and_run_sync():

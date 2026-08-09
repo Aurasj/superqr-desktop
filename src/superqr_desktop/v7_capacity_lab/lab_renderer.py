@@ -1,11 +1,9 @@
 """V7 Capacity Lab renderer.
 
 Converts protocol SymbolMatrix objects to display frames via a compact
-byte-buffer path with nearest-neighbor scaling. No per-cell draw calls.
-
-V6_REFERENCE_LAB_CARRIER: temporary laboratory scaffolding that reuses
-the physically validated V6 border/anchors/homography structure.
-This does NOT define final V7 geometry.
+byte-buffer path with nearest-neighbor scaling. The laboratory acquisition
+carrier is deliberately independent of frozen V6 geometry and does not define
+the eventual production V7 data PHY or wire format.
 """
 
 from __future__ import annotations
@@ -16,7 +14,6 @@ from dataclasses import dataclass, field
 import pygame
 
 from superqr_desktop.v7_capacity_lab.protocol_bridge import (
-    load_v6_visual_contract,
     load_phy_selection_manifest,
     get_protocol_geometry,
     get_protocol_palettes,
@@ -47,23 +44,15 @@ def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
-class V6CarrierRenderer:
-    """Renders the V6 outer geometry once as a static cached Surface.
-
-    V6_REFERENCE_LAB_CARRIER — temporary laboratory scaffolding.
-    Does NOT define final V7 geometry.
-    """
+class V7AcquisitionCarrierRenderer:
+    """Renders the lab-only V7 acquisition carrier once and caches it."""
 
     def __init__(self, canonical_size: int = 1000):
         self.canonical_size = canonical_size
-        self.contract = load_v6_visual_contract()
-        self._scale = canonical_size / self.contract["canvas"]["width"]
+        manifest = load_phy_selection_manifest()
+        self.contract = manifest["acquisition_carrier"]
+        self._scale = canonical_size / manifest["canvas_size"]
         self._surface: pygame.Surface | None = None
-
-        # Build palette from V6 contract
-        self._palette: dict[str, tuple[int, int, int]] = {}
-        for idx_key, entry in self.contract["palette"]["indexes"].items():
-            self._palette[entry["name"]] = _hex_to_rgb(entry["sRGB"])
 
     @property
     def surface(self) -> pygame.Surface:
@@ -80,56 +69,28 @@ class V6CarrierRenderer:
         return pygame.Rect(x1, y1, x2 - x1, y2 - y1)
 
     def _build(self) -> pygame.Surface:
-        """Build the complete V6 carrier surface once."""
+        """Build a thick frame, four nested finders, and calibration pilots."""
         surf = pygame.Surface((self.canonical_size, self.canonical_size))
         surf.fill((255, 255, 255))
 
-        # Border
-        b = self.contract["border"]
-        stroke = b["stroke_width"]
-        outer = b["bbox"]
-        inner = [outer[0] + stroke, outer[1] + stroke,
-                 outer[2] - stroke, outer[3] - stroke]
-        pygame.draw.rect(surf, self._palette["BLACK"], self._rect(outer))
-        pygame.draw.rect(surf, self._palette["WHITE"], self._rect(inner))
+        border = self.contract["outer_border"]
+        outer = border["bbox"]
+        thickness = border["thickness"]
+        inner = [outer[0] + thickness, outer[1] + thickness,
+                 outer[2] - thickness, outer[3] - thickness]
+        pygame.draw.rect(surf, (0, 0, 0), self._rect(outer))
+        pygame.draw.rect(surf, (255, 255, 255), self._rect(inner))
 
-        # Anchors
-        for _key, anchor in self.contract["anchors"]["elements"].items():
-            pygame.draw.rect(surf, self._palette["BLACK"], self._rect(anchor["bbox"]))
-            core_bbox = anchor["identity_pattern"]["core_bbox"]
-            pygame.draw.rect(surf, self._palette["WHITE"], self._rect(core_bbox))
-            quadrants = anchor["identity_pattern"]["black_quadrants"]
-            cx = (core_bbox[0] + core_bbox[2]) // 2
-            cy = (core_bbox[1] + core_bbox[3]) // 2
-            for q in quadrants:
-                if q == "top_left":
-                    qb = [core_bbox[0], core_bbox[1], cx, cy]
-                elif q == "top_right":
-                    qb = [cx, core_bbox[1], core_bbox[2], cy]
-                elif q == "bottom_left":
-                    qb = [core_bbox[0], cy, cx, core_bbox[3]]
-                elif q == "bottom_right":
-                    qb = [cx, cy, core_bbox[2], core_bbox[3]]
-                else:
-                    continue
-                pygame.draw.rect(surf, self._palette["BLACK"], self._rect(qb))
+        for finder in self.contract["finder_patterns"]:
+            pygame.draw.rect(surf, (0, 0, 0), self._rect(finder["outer_bbox"]))
+            pygame.draw.rect(surf, (255, 255, 255), self._rect(finder["inner_bbox"]))
+            pygame.draw.rect(surf, (0, 0, 0), self._rect(finder["core_bbox"]))
 
-        # Calibration pilots
-        for _key, pilot in self.contract["calibration_pilots"]["elements"].items():
-            pygame.draw.rect(surf, self._palette[pilot["carrier_color"]],
+        for pilot in self.contract["pilots"]:
+            pygame.draw.rect(surf, _hex_to_rgb(pilot["carrier_color"]),
                              self._rect(pilot["carrier_bbox"]))
-            pygame.draw.rect(surf, self._palette[pilot["core_color"]],
+            pygame.draw.rect(surf, _hex_to_rgb(pilot["core_color"]),
                              self._rect(pilot["core_bbox"]))
-
-        # Border tracking
-        for _key, tracker in self.contract["border_tracking"]["elements"].items():
-            pygame.draw.rect(surf, self._palette[tracker["color"]],
-                             self._rect(tracker["bbox"]))
-
-        # Phase sync cells (statically rendered — SYNC_0=BLACK, SYNC_1=WHITE)
-        for key, sync in self.contract["phase_sync_cells"]["elements"].items():
-            color = self._palette["BLACK"] if key == "SYNC_0" else self._palette["WHITE"]
-            pygame.draw.rect(surf, color, self._rect(sync["bbox"]))
 
         return surf
 
@@ -149,7 +110,7 @@ class LabRenderer:
         self._marker_scale = marker_size / self._canonical_size
 
         # Carrier: build canonical, scale once to marker size
-        self._carrier_canonical = V6CarrierRenderer(self._canonical_size)
+        self._carrier_canonical = V7AcquisitionCarrierRenderer(self._canonical_size)
         carrier_src = self._carrier_canonical.surface
         if marker_size != self._canonical_size:
             self._carrier_display = pygame.transform.scale(
