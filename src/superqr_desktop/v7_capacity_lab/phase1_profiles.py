@@ -13,6 +13,7 @@ from superqr_desktop.v7_capacity_lab.protocol_bridge import (
     get_protocol_prng,
     load_phy_selection_manifest,
 )
+from superqr_desktop.v7_capacity_lab.run_sync import LabRunEnvelope, RunState
 
 
 class Phase1ManifestError(RuntimeError):
@@ -29,11 +30,25 @@ def qr_controls() -> dict[str, dict]:
     return {entry["name"]: entry for entry in manifest["qr_controls"]}
 
 
-def encode_frame_index_strip(frame_index: int) -> list[int]:
-    if not 0 <= frame_index < 256:
-        raise ValueError("frame_index must be in [0, 255]")
-    bits = [(frame_index >> shift) & 1 for shift in range(7, -1, -1)]
-    return bits * 3
+def profile_id(profile_name: str) -> int:
+    names = list(grid_profiles()) + list(qr_controls())
+    try:
+        return names.index(profile_name)
+    except ValueError as error:
+        raise Phase1ManifestError(f"Unknown profile: {profile_name}") from error
+
+
+def build_run_envelope(
+    profile_name: str,
+    run_token: int,
+    frame_index: int,
+    frame_count: int,
+    dwell_epochs: int,
+    state: RunState = RunState.RUNNING,
+) -> LabRunEnvelope:
+    return LabRunEnvelope(
+        state, profile_id(profile_name), run_token, frame_index, frame_count, dwell_epochs,
+    )
 
 
 class GridFrameSequence:
@@ -85,7 +100,15 @@ def validate_grid_vectors() -> None:
                 )
 
 
-def build_qr_control_payload(control: dict, frame_index: int) -> bytes:
+def build_qr_control_payload(
+    control: dict,
+    frame_index: int,
+    *,
+    run_token: int = 0,
+    state: RunState = RunState.RUNNING,
+    frame_count: int = 256,
+    dwell_epochs: int = 3,
+) -> bytes:
     frame_bytes = int(control["frame_bytes"])
     body = bytearray(frame_bytes - 4)
     body[0:4] = b"SQP1"
@@ -95,16 +118,19 @@ def build_qr_control_payload(control: dict, frame_index: int) -> bytes:
     struct.pack_into("<I", body, 6, frame_index)
     struct.pack_into("<I", body, 10, seed)
     struct.pack_into("<H", body, 14, frame_bytes)
+    body[16:26] = build_run_envelope(
+        control["name"], run_token, frame_index, frame_count, dwell_epochs, state,
+    ).encode()
     prng_mod = get_protocol_prng()
     prng = prng_mod.Xorshift32((seed ^ int(control["version"]) ^ frame_index) or 1)
-    for index in range(16, len(body)):
+    for index in range(26, len(body)):
         body[index] = prng.next() & 0xFF
     return bytes(body) + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
 
 
-def build_qr_matrix(control: dict, frame_index: int) -> tuple[bytes, ...]:
+def build_qr_matrix(control: dict, frame_index: int, **payload_options) -> tuple[bytes, ...]:
     """Encode an exact-version QR frame and return its matrix without quiet zone."""
-    payload = build_qr_control_payload(control, frame_index)
+    payload = build_qr_control_payload(control, frame_index, **payload_options)
     qr = segno.make_qr(
         payload,
         version=int(control["version"]),

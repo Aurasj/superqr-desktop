@@ -1,154 +1,104 @@
-"""Standalone transmitter for the V7 Phase 1 PHY-selection experiment."""
+"""CLI wrapper around the reusable V7 physical PHY campaign presenter."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import time
 
 import pygame
 
-from superqr_desktop.v7_capacity_lab.lab_display import LabDisplayController, TimingMode
-from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
-from superqr_desktop.v7_capacity_lab.phase1_profiles import (
-    GridFrameSequence,
-    build_qr_matrix,
-    encode_frame_index_strip,
-    grid_profiles,
-    qr_controls,
-    validate_grid_vectors,
-    validate_qr_vectors,
+from superqr_desktop.v7_capacity_lab.campaign import (
+    CampaignState,
+    Phase1CampaignPresenter,
+    build_campaign,
 )
-from superqr_desktop.v7_capacity_lab.protocol_bridge import load_phy_selection_manifest
+from superqr_desktop.v7_capacity_lab.phase1_profiles import grid_profiles, qr_controls
 
 
 def build_parser() -> argparse.ArgumentParser:
     profiles = list(grid_profiles()) + list(qr_controls())
-    parser = argparse.ArgumentParser(description="SuperQR V7 Phase 1 PHY transmitter")
+    parser = argparse.ArgumentParser(description="SuperQR V7 physical PHY lab transmitter")
     parser.add_argument("--profile", choices=profiles)
     parser.add_argument("--list", action="store_true", help="list canonical profiles")
+    parser.add_argument(
+        "--campaign",
+        choices=("selected", "all", "mono", "grid-dwell"),
+        default="selected",
+    )
     parser.add_argument("--dwell", type=int, choices=[2, 3], default=3)
     parser.add_argument("--frames", type=int, default=256)
     parser.add_argument("--marker-size", type=int, default=800)
     parser.add_argument("--display", type=int, default=0)
     parser.add_argument("--fullscreen", action="store_true")
+    parser.add_argument("--ready-seconds", type=float, default=4.0)
+    parser.add_argument("--done-seconds", type=float, default=2.0)
+    parser.add_argument("--run-token", type=lambda value: int(value, 0))
+    parser.add_argument("--json-status", action="store_true")
     return parser
 
 
 def _list_profiles() -> None:
     for profile in grid_profiles().values():
-        print(
-            f"{profile['name']}: {profile['cols']}x{profile['rows']} "
-            f"{profile['raw_bytes_per_frame']} B/frame"
-        )
+        print(f"{profile['name']}: {profile['cols']}x{profile['rows']} {profile['raw_bytes_per_frame']} B/frame")
     for control in qr_controls().values():
-        print(
-            f"{control['name']}: QR V{control['version']}-{control['error_correction']} "
-            f"{control['frame_bytes']} B @ {control['target_fps']:g} fps"
-        )
+        print(f"{control['name']}: QR V{control['version']}-{control['error_correction']} {control['frame_bytes']} B")
 
 
 class Phase1Runner:
+    PRESET_NAMES = {
+        "selected": "Selected profile",
+        "all": "All canonical profiles",
+        "mono": "Monochrome density sweep",
+        "grid-dwell": "Full grid dwell sweep",
+    }
+
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.manifest = load_phy_selection_manifest()
-        self.grid = grid_profiles().get(args.profile)
-        self.qr = qr_controls().get(args.profile)
-        self.display = LabDisplayController(dwell_epochs=args.dwell)
-        self.renderer: LabRenderer | None = None
-        self.grid_sequence = GridFrameSequence(args.profile) if self.grid else None
-        self.qr_matrices: list[tuple[bytes, ...]] = []
-        self.qr_surfaces: list[pygame.Surface] = []
-        self.frame_index = 0
-        self.last_advance = time.perf_counter()
-
-    def prepare(self) -> None:
-        validate_grid_vectors()
-        validate_qr_vectors()
-        if self.qr:
-            print(f"Pre-encoding {self.args.frames} QR controls outside the timed presentation loop...")
-            self.qr_matrices = [
-                build_qr_matrix(self.qr, index) for index in range(self.args.frames)
-            ]
-        pygame.init()
-        marker_size = int(self.qr["display_size_px"]) if self.qr else self.args.marker_size
-        self.display.setup_display(
-            display_index=self.args.display,
-            fullscreen=self.args.fullscreen,
-            marker_size=marker_size,
-        )
-        self.renderer = LabRenderer(marker_size)
-        if self.qr:
-            quiet = int(self.qr["quiet_zone_modules"])
-            self.qr_surfaces = [
-                self.renderer.build_qr_native_surface(matrix, quiet)
-                for matrix in self.qr_matrices
-            ]
-            self.qr_matrices.clear()
-        self._prepare_frame()
-        print(
-            f"READY profile={self.args.profile} frames={self.args.frames} "
-            f"timing={self.display.diag.timing_mode.name}. Space starts; Esc quits."
-        )
-
-    def _prepare_frame(self) -> None:
-        assert self.renderer is not None
-        if self.grid:
-            assert self.grid_sequence is not None
-            frame_index, matrix = self.grid_sequence.next_frame()
-            if frame_index != self.frame_index % 256:
-                raise RuntimeError("grid sequence index drift")
-            self.renderer.prepare_logical_frame(
-                matrix,
-                payload_bbox=self.manifest["payload_bbox"],
-                frame_index_bits=encode_frame_index_strip(frame_index),
-                frame_index_bbox=self.manifest["frame_index_strip"]["bbox"],
-            )
-        else:
-            self.renderer.prepare_qr_native_surface(self.qr_surfaces[self.frame_index])
 
     def run(self) -> None:
-        self.prepare()
-        assert self.renderer is not None
-        running = True
-        started = False
-        while running:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT or (
-                    event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q)
-                ):
-                    running = False
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                    started = not started
-                    self.last_advance = time.perf_counter()
-                    print("RUNNING" if started else "PAUSED")
-
-            if self.renderer.cached_frame_display is not None:
-                self.display.present(self.renderer.cached_frame_display)
-
-            if not started:
-                continue
-
-            advance = False
-            if self.grid and self.display.diag.timing_mode == TimingMode.VSYNC_MODE:
-                advance = self.display.dwell.record_present()
-            else:
-                fps = (
-                    float(self.qr["target_fps"])
-                    if self.qr
-                    else self.display.diag.reported_refresh_hz / self.args.dwell
-                )
-                now = time.perf_counter()
-                if now - self.last_advance >= 1.0 / fps:
-                    self.last_advance += 1.0 / fps
-                    advance = True
-
-            if advance:
-                self.frame_index += 1
-                if self.frame_index >= self.args.frames:
-                    print("COMPLETE")
+        profile = self.args.profile or "mono_128x100_qrlike"
+        runs = build_campaign(
+            self.PRESET_NAMES[self.args.campaign], profile, self.args.dwell, self.args.frames,
+        )
+        presenter = Phase1CampaignPresenter(
+            runs, display_index=self.args.display, fullscreen=self.args.fullscreen,
+            marker_size=self.args.marker_size, ready_seconds=self.args.ready_seconds,
+            done_seconds=self.args.done_seconds, first_run_token=self.args.run_token,
+        )
+        clock = pygame.time.Clock()
+        previous = None
+        try:
+            presenter.start()
+            while True:
+                if not presenter.tick():
                     break
-                self._prepare_frame()
-        self.display.close()
+                snapshot = presenter.snapshot()
+                key = (snapshot.state, snapshot.run_number, snapshot.frame_index)
+                if key != previous and (
+                    snapshot.state != CampaignState.RUNNING or snapshot.frame_index % 10 == 0
+                ):
+                    if self.args.json_status:
+                        print(json.dumps(snapshot.__dict__, default=str), flush=True)
+                    else:
+                        print(
+                            f"{snapshot.state.value} run={snapshot.run_number}/{snapshot.run_total} "
+                            f"token={snapshot.run_token:04X} profile={snapshot.profile} "
+                            f"frame={snapshot.frame_index + 1}/{snapshot.frame_count}",
+                            flush=True,
+                        )
+                    previous = key
+                if (
+                    snapshot.state == CampaignState.DONE
+                    and snapshot.run_number == snapshot.run_total
+                    and time.perf_counter() - presenter.state_started >= self.args.done_seconds
+                ):
+                    break
+                clock.tick(240)
+            if presenter.state == CampaignState.ERROR:
+                raise RuntimeError(presenter.error or "presentation failed")
+        finally:
+            presenter.stop()
 
 
 def main() -> None:
@@ -156,10 +106,12 @@ def main() -> None:
     if args.list:
         _list_profiles()
         return
-    if not args.profile:
-        raise SystemExit("--profile is required unless --list is used")
+    if args.campaign == "selected" and not args.profile:
+        raise SystemExit("--profile is required for the selected campaign")
     if args.frames < 1 or args.frames > 256:
         raise SystemExit("--frames must be in [1, 256]")
+    if args.ready_seconds < 0 or args.done_seconds < 0:
+        raise SystemExit("ready/done seconds must be non-negative")
     Phase1Runner(args).run()
 
 

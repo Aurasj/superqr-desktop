@@ -14,6 +14,7 @@ from superqr_desktop.v7.profiles import DEFAULT_PROFILE, PROFILES, BY_LABEL
 from superqr_desktop.v7.renderer import V7TransferRenderer
 from superqr_desktop.v7.sender import V7SenderSession
 from superqr_desktop.v7.telemetry import PresentationTelemetry
+from superqr_desktop.v7_capacity_lab.phy_lab_ui import open_phy_lab
 
 SIZE_PRESETS = [1000, 900, 800, 700, 600, 500, 400]
 DEBUG_PATTERNS = [
@@ -45,6 +46,8 @@ class ControlApp:
         self.sender_last_tick = 0.0
         self.v7_renderer: V7TransferRenderer | None = None
         self.telemetry = PresentationTelemetry()
+        self.phy_lab_window = None
+        self.phy_lab_active = False
 
         self.root = tk.Tk()
         self.root.title("SuperQR")
@@ -103,6 +106,7 @@ class ControlApp:
 
         ttk.Label(main, text="SuperQR", style="Title.TLabel").pack(anchor="w")
         ttk.Label(main, text="Adaptive offline screen → camera transfer", foreground=self.muted).pack(anchor="w", pady=(0, 8))
+        ttk.Button(main, text="OPEN V7 PHYSICAL PHY LAB", command=self.open_phy_lab).pack(fill="x", pady=(0, 5))
 
         display = self._card(main, "DISPLAY")
         row = ttk.Frame(display, style="Card.TFrame")
@@ -199,6 +203,22 @@ class ControlApp:
 
     def _reset_measurement(self):
         self.telemetry.reset()
+
+    def open_phy_lab(self):
+        if self.phy_lab_window is not None and self.phy_lab_window.window.winfo_exists():
+            self.phy_lab_window.window.lift()
+            return
+        self.sender.stop_transfer()
+        self.phy_lab_active = True
+        self.phy_lab_window = open_phy_lab(self.root, on_close=self._phy_lab_closed)
+
+    def _phy_lab_closed(self):
+        self.phy_lab_window = None
+        self.phy_lab_active = False
+        try:
+            self.apply_display()
+        except Exception as exc:
+            self._set_error(exc)
 
     def _selected_display_index(self) -> int:
         label = self.selected_display_str.get()
@@ -451,7 +471,7 @@ class ControlApp:
                 self.root.update()
             except tk.TclError:
                 break
-            if self.sender.transfer_state == "SENDING" and self.sender.total_frames:
+            if not self.phy_lab_active and self.sender.transfer_state == "SENDING" and self.sender.total_frames:
                 now = time.monotonic()
                 if now - self.sender_last_tick >= self.sender.interval_ms / 1000.0:
                     self.sender_last_tick = now
@@ -460,7 +480,7 @@ class ControlApp:
                         self._render_current_transfer_frame(); self._update_sender_ui()
                     except Exception as exc:
                         self.sender.stop_transfer(); self._set_error(exc)
-            for event in pygame.event.get():
+            for event in (() if self.phy_lab_active else pygame.event.get()):
                 if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                     self.root.destroy(); pygame.quit(); return
 

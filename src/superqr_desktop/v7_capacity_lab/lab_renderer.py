@@ -178,8 +178,10 @@ class LabRenderer:
         self,
         symbol_matrix,
         payload_bbox=None,
-        frame_index_bits: list[int] | None = None,
-        frame_index_bbox=None,
+        sync_bits: list[int] | None = None,
+        sync_bboxes=None,
+        sync_rows: int = 2,
+        sync_cols: int = 40,
     ) -> None:
         """Build and cache the display frame for a new logical frame.
 
@@ -231,10 +233,11 @@ class LabRenderer:
         # 4. Compose: copy cached carrier, blit payload
         frame = self._carrier_display.copy()
         frame.blit(payload_scaled, (display_payload_rect.x, display_payload_rect.y))
-        if frame_index_bits is not None:
-            if frame_index_bbox is None:
-                raise ValueError("frame_index_bbox is required with frame_index_bits")
-            self._draw_bit_strip(frame, frame_index_bits, frame_index_bbox)
+        if sync_bits is not None:
+            if sync_bboxes is None:
+                raise ValueError("sync_bboxes is required with sync_bits")
+            for bbox in sync_bboxes:
+                self._draw_bit_grid(frame, sync_bits, bbox, sync_rows, sync_cols)
         t5 = time.perf_counter_ns()
 
         self._cached_frame = frame
@@ -246,18 +249,20 @@ class LabRenderer:
         self.timings.compose_us = (t5 - t4) // 1000
         self.timings.total_prepare_us = (t5 - t_start) // 1000
 
-    def _draw_bit_strip(self, frame: pygame.Surface, bits: list[int], bbox) -> None:
-        if not bits:
-            raise ValueError("bit strip must not be empty")
+    def _draw_bit_grid(
+        self, frame: pygame.Surface, bits: list[int], bbox, rows: int, cols: int,
+    ) -> None:
+        if len(bits) != rows * cols:
+            raise ValueError("bit-grid dimensions do not match bits")
         rect = self._compute_display_payload_rect(bbox)
         for index, bit in enumerate(bits):
-            x1 = rect.x + round(index * rect.width / len(bits))
-            x2 = rect.x + round((index + 1) * rect.width / len(bits))
-            pygame.draw.rect(
-                frame,
-                (255, 255, 255) if bit else (0, 0, 0),
-                pygame.Rect(x1, rect.y, max(1, x2 - x1), rect.height),
-            )
+            row, col = divmod(index, cols)
+            x1 = rect.x + round(col * rect.width / cols)
+            x2 = rect.x + round((col + 1) * rect.width / cols)
+            y1 = rect.y + round(row * rect.height / rows)
+            y2 = rect.y + round((row + 1) * rect.height / rows)
+            pygame.draw.rect(frame, (255, 255, 255) if bit else (0, 0, 0),
+                             pygame.Rect(x1, y1, max(1, x2 - x1), max(1, y2 - y1)))
 
     def prepare_qr_matrix(self, matrix: tuple[bytes, ...], quiet_zone: int = 4) -> None:
         """Prepare a standard QR control with exact integer module scaling."""

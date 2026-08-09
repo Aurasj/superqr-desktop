@@ -279,6 +279,8 @@ class LabDisplayController:
 
         The caller is responsible for calling this once per display refresh.
         """
+        if self.screen is None or not pygame.display.get_init():
+            raise RuntimeError("lab display is not open")
         t0 = time.perf_counter_ns()
 
         # Center the marker on the canvas
@@ -323,3 +325,23 @@ class LabDisplayController:
 
     def expected_dwell_ms(self) -> float:
         return self.diag.expected_logical_dwell_ms
+
+    def reset_measurement(self) -> None:
+        self.diag.present_block_us = 0
+        self.diag.present_interval_ms = 0.0
+        self.diag.present_count = 0
+        self.diag.measured_logical_frame_ms = 0.0
+        self.diag.late_present_count = 0
+        self.diag.estimated_skipped_refreshes = 0
+        self.diag._recent_intervals.clear()
+        self.dwell = DwellState(dwell_epochs=self.dwell_epochs)
+        self._last_present_time = None
+        self._dwell_start_time = time.perf_counter()
+
+    def close(self) -> None:
+        """Idempotently release the display without touching a dead Surface."""
+        self.screen = None
+        self._last_present_time = None
+        self._dwell_start_time = None
+        if pygame.display.get_init():
+            pygame.display.quit()
