@@ -140,6 +140,16 @@ def test_qr_control_embeds_same_run_envelope():
     assert envelope.state == RunState.READY
 
 
+def test_desktop_matches_ready_running_done_conformance_trace():
+    trace = protocol_bridge.load_phy_selection_manifest()["run_sync"]["conformance_trace"]
+    for packet in trace["packets"]:
+        envelope = build_run_envelope(
+            trace["profile"], trace["run_token"], packet["frame_index"],
+            trace["frame_count"], trace["dwell_epochs"], RunState[packet["state"]],
+        )
+        assert envelope.encode().hex().upper() == packet["packet_hex"]
+
+
 def test_campaign_presets_are_ordered_and_reusable():
     canonical = build_campaign("All canonical profiles", "mono_96x75_medium", 3, 32)
     assert len(canonical) == 7
@@ -161,7 +171,7 @@ def test_physical_lab_ui_exposes_required_controls():
     from superqr_desktop.v7_capacity_lab.phy_lab_ui import PhyLabWindow
 
     source = inspect.getsource(PhyLabWindow)
-    for label in ("CAMPAIGN", "DISPLAY", "RUN CONTROL", "START CAMPAIGN", "STOP", "Analyze receiver JSONL"):
+    for label in ("CAMPAIGN CONSOLE", "Campaign setup", "Live run", "START CAMPAIGN", "STOP", "Analyze Android JSONL"):
         assert label in source
 
 
