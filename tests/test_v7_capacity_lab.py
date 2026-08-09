@@ -278,3 +278,24 @@ def test_log_analysis_excludes_rejected_frames_and_flags_frame_zero_wait():
     assert summary["rejected_frames"] == 1
     assert summary["initial_frame_zero_observations"] == 4
     assert summary["failure_reasons"] == {"SYNC_CRC": 1}
+    assert summary["pipeline_mean_ms"] == 10.0
+
+
+def test_log_analysis_reports_unsynchronized_pipeline_and_capture_evidence():
+    records = [
+        {
+            "profile": "AUTO_UNSYNCED", "completed_ns": (index + 1) * 1_000_000_000,
+            "pipeline_ms": 1200.0 + index * 100.0, "scored": False,
+            "failure_reason": "QR_NOT_DECODED", "sync_status": "QR_NOT_DECODED",
+            "geometry_source": "NO_V6_GEOMETRY", "capture_width": 3456,
+            "capture_height": 3456,
+        }
+        for index in range(3)
+    ]
+    summary = analyze_records(records)
+    assert summary["scored_frames"] == 0
+    assert summary["pipeline_mean_ms"] == 1300.0
+    assert summary["analysis_fps"] == 1.0
+    assert summary["capture_resolutions"] == {"3456x3456": 3}
+    assert summary["sync_states"] == {"QR_NOT_DECODED": 3}
+    assert summary["geometry_states"] == {"NO_V6_GEOMETRY": 3}

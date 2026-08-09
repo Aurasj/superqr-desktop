@@ -8,6 +8,12 @@ from pathlib import Path
 
 
 def analyze_records(records: list[dict]) -> dict:
+    def percentile(values: list[float], fraction: float) -> float:
+        ordered = sorted(values)
+        if not ordered:
+            return 0.0
+        return ordered[max(0, int(len(ordered) * fraction + 0.999) - 1)]
+
     def is_scored(record: dict) -> bool:
         if "scored" in record:
             return bool(record["scored"])
@@ -54,8 +60,19 @@ def analyze_records(records: list[dict]) -> dict:
     raw_valid = sum(bool(record.get("raw_valid", record.get("frame_valid", False))) for record in scored)
     inner_valid = sum(bool(record.get("inner_fec_valid", record.get("post_fec_valid", False))) for record in scored)
     innovative = sum(int(record.get("innovative_bytes", 0)) for record in scored)
-    pipelines = sorted(float(record.get("pipeline_ms", 0.0)) for record in scored)
-    p95 = pipelines[max(0, int(len(pipelines) * 0.95 + 0.999) - 1)] if pipelines else 0.0
+    pipelines = [float(record.get("pipeline_ms", 0.0)) for record in records]
+    completed_ns = [int(record.get("completed_ns", 0)) for record in records if int(record.get("completed_ns", 0)) > 0]
+    acquisition_elapsed = (max(completed_ns) - min(completed_ns)) / 1_000_000_000.0 if len(completed_ns) > 1 else 0.0
+    stage_keys = ("luma_pack_ms", "geometry_ms", "sync_ms", "payload_ms", "qr_ms")
+    stage_means = {
+        key: sum(values) / len(values)
+        for key in stage_keys
+        if (values := [float(record[key]) for record in records if record.get(key) is not None])
+    }
+    resolution_counts = Counter(
+        f"{int(record['capture_width'])}x{int(record['capture_height'])}"
+        for record in records if record.get("capture_width") and record.get("capture_height")
+    )
     return {
         "observations": len(records),
         "scored_frames": len(scored),
@@ -69,7 +86,16 @@ def analyze_records(records: list[dict]) -> dict:
         "inner_fec_valid_yield": inner_valid / len(scored) if scored else 0.0,
         "goodput_kib_s": innovative / elapsed / 1024.0 if elapsed else 0.0,
         "pipeline_mean_ms": sum(pipelines) / len(pipelines) if pipelines else 0.0,
-        "pipeline_p95_ms": p95,
+        "pipeline_p95_ms": percentile(pipelines, 0.95),
+        "pipeline_max_ms": max(pipelines) if pipelines else 0.0,
+        "analysis_elapsed_s": acquisition_elapsed,
+        "analysis_fps": (len(records) - 1) / acquisition_elapsed if acquisition_elapsed else 0.0,
+        "capture_resolutions": dict(resolution_counts.most_common()),
+        "profiles": dict(Counter(str(record.get("profile", "UNKNOWN")) for record in records).most_common()),
+        "sync_states": dict(Counter(str(record.get("sync_status", "UNKNOWN")) for record in records).most_common()),
+        "geometry_states": dict(Counter(str(record.get("geometry_source", "UNKNOWN")) for record in records).most_common()),
+        "analysis_paths": dict(Counter(str(record.get("analysis_path", "LEGACY_SERIAL")) for record in records).most_common()),
+        "stage_mean_ms": stage_means,
         "failure_reasons": dict(failures.most_common()),
     }
 
@@ -90,6 +116,10 @@ def analyze_jsonl(path: str | Path) -> dict:
 
 def format_analysis(summary: dict) -> str:
     reasons = ", ".join(f"{key}={value}" for key, value in summary["failure_reasons"].items()) or "none"
+    resolutions = ", ".join(f"{key}={value}" for key, value in summary["capture_resolutions"].items()) or "unknown"
+    sync = ", ".join(f"{key}={value}" for key, value in summary["sync_states"].items()) or "unknown"
+    geometry = ", ".join(f"{key}={value}" for key, value in summary["geometry_states"].items()) or "unknown"
+    stages = ", ".join(f"{key}={value:.2f}" for key, value in summary["stage_mean_ms"].items()) or "not recorded"
     return (
         f"Observations {summary['observations']} • scored {summary['scored_frames']} • "
         f"rejected {summary['rejected_frames']}\n"
@@ -98,6 +128,9 @@ def format_analysis(summary: dict) -> str:
         f"BER {summary['ber_non_erased']:.3%} • erasures {summary['erasure_rate']:.3%} • "
         f"raw yield {summary['raw_valid_yield']:.2%} • inner-FEC yield {summary['inner_fec_valid_yield']:.2%}\n"
         f"Goodput {summary['goodput_kib_s']:.2f} KiB/s • pipeline mean/p95 "
-        f"{summary['pipeline_mean_ms']:.2f}/{summary['pipeline_p95_ms']:.2f} ms\n"
+        f"{summary['pipeline_mean_ms']:.2f}/{summary['pipeline_p95_ms']:.2f} ms • "
+        f"analysis {summary['analysis_fps']:.2f} fps\n"
+        f"Capture {resolutions}\nSync {sync}\nGeometry {geometry}\n"
+        f"Stage means (ms): {stages}\n"
         f"Failure evidence: {reasons}"
     )
