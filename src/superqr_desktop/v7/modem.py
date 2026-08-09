@@ -18,6 +18,20 @@ class InnerFecPlan:
 @dataclass(frozen=True)
 class GenerationPlan:
     generation_id:int; offset:int; payload_len:int; source_count:int; symbol_bytes:int
+@dataclass(frozen=True)
+class GenerationLayout:
+    """O(1)-memory deterministic generation map for arbitrarily large streams."""
+    stream_size:int; symbol_bytes:int; target_source_count:int; generation_capacity:int; total_generations:int
+    def plan(self,generation_id:int)->GenerationPlan:
+        if not 0<=generation_id<self.total_generations:raise IndexError("generation outside stream")
+        offset=generation_id*self.generation_capacity;payload_len=min(self.generation_capacity,self.stream_size-offset);source_count=(payload_len+self.symbol_bytes-1)//self.symbol_bytes
+        return GenerationPlan(generation_id,offset,payload_len,source_count,self.symbol_bytes)
+
+def generation_layout(stream_size:int,symbol_bytes:int,target_generation_bytes:int=DEFAULT_GENERATION_TARGET_BYTES)->GenerationLayout:
+    if stream_size<1 or symbol_bytes<1 or target_generation_bytes<1:raise V7ModemError("invalid generation planning input")
+    target_count=min(MAX_SOURCE_SYMBOLS,max(1,(target_generation_bytes+symbol_bytes-1)//symbol_bytes));capacity=target_count*symbol_bytes;total=(stream_size+capacity-1)//capacity
+    if total>0xffffffff:raise V7ModemError("stream requires more than uint32 generations")
+    return GenerationLayout(stream_size,symbol_bytes,target_count,capacity,total)
 
 def _splitmix64_next(state:int)->tuple[int,int]:
     state=(state+0x9E3779B97F4A7C15)&MASK64; z=state; z=((z^(z>>30))*0xBF58476D1CE4E5B9)&MASK64; z=((z^(z>>27))*0x94D049BB133111EB)&MASK64; return state,(z^(z>>31))&MASK64
@@ -123,8 +137,6 @@ def inner_fec_encode(packet:bytes,channel_bytes:int,ratio:float=DEFAULT_PARITY_R
     for logical,physical in enumerate(_interleave_map(channel_bytes,plan.interleave_stride)):out[physical]=raw[logical]
     return bytes(out)
 def plan_generations(stream_size:int,symbol_bytes:int,target_generation_bytes:int=DEFAULT_GENERATION_TARGET_BYTES)->tuple[GenerationPlan,...]:
-    if stream_size<1 or symbol_bytes<1 or target_generation_bytes<1:raise V7ModemError("invalid generation planning input")
-    target_count=min(MAX_SOURCE_SYMBOLS,max(1,(target_generation_bytes+symbol_bytes-1)//symbol_bytes));capacity=target_count*symbol_bytes;plans=[];offset=0;gid=0
-    while offset<stream_size:
-        length=min(capacity,stream_size-offset);count=(length+symbol_bytes-1)//symbol_bytes;plans.append(GenerationPlan(gid,offset,length,count,symbol_bytes));offset+=length;gid+=1
-    return tuple(plans)
+    """Materialized reference helper. Production sender uses GenerationLayout."""
+    layout=generation_layout(stream_size,symbol_bytes,target_generation_bytes)
+    return tuple(layout.plan(generation_id) for generation_id in range(layout.total_generations))
