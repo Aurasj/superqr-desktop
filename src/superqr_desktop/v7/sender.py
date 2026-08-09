@@ -6,9 +6,9 @@ import mimetypes
 import os
 import zlib
 
+from superqr_desktop.v7.model import SymbolMatrix
 from superqr_desktop.v7.profiles import DEFAULT_PROFILE, OpticalProfile, get_profile
 from superqr_desktop.v7.transport import build_frame, build_package_prefix, bytes_to_symbols
-from superqr_desktop.v7_capacity_lab._local.model import SymbolMatrix
 
 
 class V7SenderSession:
@@ -27,10 +27,9 @@ class V7SenderSession:
         self.session_id: int | None = None
         self.total_frames = 0
         self.current_frame_idx = 0
-        # The supplied phone traces complete about 13-15 analyses/s. 100 ms keeps
-        # roughly one to two independent observations per optical frame while
-        # doubling goodput versus the conservative 200 ms bring-up default.
-        # Faster presets remain explicit capacity-test options.
+        # 40x40/4 at 100 ms is the current physical measurement baseline.
+        # Faster presets remain explicit capacity-test options; V7.0 telemetry
+        # measures the actual presentation and receiver cadence separately.
         self.interval_ms = 100
         self.profile: OpticalProfile = DEFAULT_PROFILE
 
@@ -78,10 +77,8 @@ class V7SenderSession:
         self.total_frames = total_frames
         self.current_frame_idx = 0
 
-        # Selecting a file is the send action. Previously prepare_transfer left a
-        # perfectly valid frame 0 parked on screen in READY state, so Android could
-        # report RECEIVING forever while collecting only duplicates if the user did
-        # not press START. A prepared transfer now immediately enters the carousel.
+        # Selecting a file is the send action. A prepared transfer immediately
+        # enters the carousel so frame 0 cannot remain parked indefinitely.
         self.transfer_state = "SENDING"
         return self.session_id
 
@@ -133,8 +130,6 @@ class V7SenderSession:
     def start_transfer(self) -> bool:
         if self.total_frames < 1:
             return False
-        # START is now a restart action as well, useful after Stop or when the
-        # receiver asks for a clean new carousel pass.
         self.transfer_state = "SENDING"
         self.current_frame_idx = 0
         return True
