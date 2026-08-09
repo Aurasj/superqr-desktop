@@ -9,9 +9,9 @@ from superqr_desktop.v7.modem import (
     build_modem_packet,
     coefficient_words,
     encode_fountain_symbol,
+    generation_layout,
     inner_fec_encode,
     inner_fec_plan,
-    plan_generations,
     symbol_payload_capacity,
 )
 from superqr_desktop.v7.modem_sender import V7ModemSender
@@ -82,10 +82,10 @@ def test_sender_keeps_generation_memory_bounded_and_has_no_exact_frame_carousel(
     path.write_bytes(os.urandom(3 * 1024 * 1024))
     with PreparedPackageSource.prepare(str(path), allow_compression=False) as source:
         sender = V7ModemSender(source, channel_bytes=400, session_id=0xA1B2C3D4, initial_repair_fraction=.25)
-        assert len(sender.plans) > 10
-        assert max(plan.source_count for plan in sender.plans) <= 256
-        assert max(plan.source_count * plan.symbol_bytes for plan in sender.plans) <= 128 * 1024 + sender.symbol_bytes
-        first = sender.plans[0]
+        assert sender.total_generations > 10
+        assert sender.layout.target_source_count <= 256
+        assert sender.layout.generation_capacity <= 128 * 1024 + sender.symbol_bytes
+        first = sender.plan(0)
         systematic = sender.physical_frame(0, 0)
         repair_a = sender.repair_frame(0, 0)
         repair_b = sender.repair_frame(0, 1)
@@ -101,27 +101,34 @@ def test_sender_repair_sweep_covers_every_generation_with_unique_symbols(tmp_pat
     path.write_bytes(os.urandom(420000))
     with PreparedPackageSource.prepare(str(path), allow_compression=False) as source:
         sender = V7ModemSender(source, channel_bytes=400, session_id=0x51525354, initial_repair_fraction=0.0)
-        assert len(sender.plans) >= 5
-        initial_total = sum(plan.source_count + 8 for plan in sender.plans)
+        assert sender.total_generations >= 5
+        initial_total = sum(sender.plan(gid).source_count + 8 for gid in range(sender.total_generations))
         for _ in range(initial_total):
             sender.next_physical_frame()
         snapshot = sender.snapshot()
         assert snapshot.schedule_phase == "REPAIR_SWEEP"
         seen = []
-        for _ in range(len(sender.plans) * 2):
+        for _ in range(sender.total_generations * 2):
             sender.next_physical_frame()
             current = sender.snapshot()
             seen.append((current.last_generation_id, current.last_symbol_id))
-        first_sweep = seen[:len(sender.plans)]
-        second_sweep = seen[len(sender.plans):]
-        assert [gid for gid, _ in first_sweep] == list(range(len(sender.plans)))
-        assert [gid for gid, _ in second_sweep] == list(range(len(sender.plans)))
-        assert all(first_sweep[index][1] + 1 == second_sweep[index][1] for index in range(len(sender.plans)))
+        first_sweep = seen[:sender.total_generations]
+        second_sweep = seen[sender.total_generations:]
+        assert [gid for gid, _ in first_sweep] == list(range(sender.total_generations))
+        assert [gid for gid, _ in second_sweep] == list(range(sender.total_generations))
+        assert all(first_sweep[index][1] + 1 == second_sweep[index][1] for index in range(sender.total_generations))
         assert len(set(seen)) == len(seen)
 
 
-def test_generation_planning_never_requires_whole_file_memory():
-    plans = plan_generations(10 * 1024 * 1024 * 1024, 2457)
-    assert len(plans) > 10000
-    assert all(plan.source_count <= 256 for plan in plans)
-    assert max(plan.payload_len for plan in plans) <= 256 * 2457
+def test_generation_layout_is_constant_memory_for_huge_streams():
+    layout = generation_layout(10 * 1024 * 1024 * 1024 * 1024, 2457)
+    assert layout.total_generations > 10_000_000
+    assert layout.target_source_count <= 256
+    assert layout.generation_capacity <= 256 * 2457
+    first = layout.plan(0)
+    middle = layout.plan(layout.total_generations // 2)
+    last = layout.plan(layout.total_generations - 1)
+    assert first.offset == 0
+    assert middle.offset == middle.generation_id * layout.generation_capacity
+    assert last.offset + last.payload_len == layout.stream_size
+    assert last.source_count <= layout.target_source_count
