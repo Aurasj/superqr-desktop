@@ -26,9 +26,8 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"superqr_desktop.contract" = ["visual_contract.json"]
+"superqr_desktop.contract" = ["visual_contract.json", "v7_modem_contract.json", "v7_modem_vectors.json"]
 "superqr_desktop.v7_capacity_lab.data" = ["*.json"]
-
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
