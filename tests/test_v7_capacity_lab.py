@@ -123,8 +123,8 @@ def test_v7_lab_carrier_renders_manifest_geometry_exactly():
         assert surface.get_at((70, 500))[:3] == (255, 255, 255)
         # Standard nested TL finder and both duplicated optical sync bands.
         assert surface.get_at((80, 80))[:3] == (0, 0, 0)
-        assert surface.get_at((100, 100))[:3] == (255, 255, 255)
-        assert surface.get_at((116, 116))[:3] == (0, 0, 0)
+        assert surface.get_at((94, 94))[:3] == (255, 255, 255)
+        assert surface.get_at((109, 109))[:3] == (0, 0, 0)
         first_bit = envelope.bits()[0]
         expected = (255, 255, 255) if first_bit else (0, 0, 0)
         assert surface.get_at((207, 152))[:3] == expected
@@ -290,8 +290,15 @@ def test_presentation_worker_completes_without_tk_scheduler_and_exports_each_run
         assert snapshot is not None
         assert snapshot.state == CampaignState.DONE
         payload = worker.export_payload()
-        assert payload["schema"] == "superqr-phy-lab-sender-v2"
+        assert payload["schema"] == "superqr-phy-lab-sender-v3"
         assert payload["production_wire_frozen"] is False
+        assert payload["presentation"] == {
+            "display_index": 0,
+            "fullscreen": False,
+            "marker_size_px": 400,
+            "ready_seconds": 0.3,
+            "done_seconds": 0.0,
+        }
         assert payload["runtime_isolation"] == "process"
         assert payload["presenter_process_id"] != os.getpid()
         assert payload["runs_completed"] == 1

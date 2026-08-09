@@ -388,8 +388,15 @@ class Phase1CampaignPresenter:
 
     def export_payload(self) -> dict:
         return {
-            "schema": "superqr-phy-lab-sender-v2",
+            "schema": "superqr-phy-lab-sender-v3",
             "production_wire_frozen": False,
+            "presentation": {
+                "display_index": self.display_index,
+                "fullscreen": self.fullscreen,
+                "marker_size_px": self.marker_size,
+                "ready_seconds": self.ready_seconds,
+                "done_seconds": self.done_seconds,
+            },
             "state": self.state.value,
             "runs_completed": len(self.run_results),
             "runs_total": len(self.runs),

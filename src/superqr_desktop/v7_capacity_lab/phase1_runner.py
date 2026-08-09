@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dwell", type=int, choices=[2, 3], default=3)
     parser.add_argument("--frames", type=int, default=256)
-    parser.add_argument("--marker-size", type=int, default=800)
+    parser.add_argument("--marker-size", type=int, default=600)
     parser.add_argument("--display", type=int, default=0)
     parser.add_argument("--fullscreen", action="store_true")
     parser.add_argument("--ready-seconds", type=float, default=4.0)

@@ -23,7 +23,7 @@ PRESETS = (
     "Monochrome density sweep",
     "Full grid dwell sweep",
 )
-MARKER_SIZES = (1000, 900, 800, 700, 600)
+MARKER_SIZES = (600, 700, 800, 900, 1000)
 
 
 class PhyLabWindow:
@@ -52,7 +52,7 @@ class PhyLabWindow:
         self.dwell_var = tk.IntVar(value=3)
         self.frames_var = tk.IntVar(value=256)
         self.display_var = tk.StringVar(value=labels[0] if labels else "Display 1")
-        self.marker_var = tk.IntVar(value=800)
+        self.marker_var = tk.IntVar(value=600)
         self.fullscreen_var = tk.BooleanVar(value=True)
         self.state_var = tk.StringVar(value="READY")
         self.state_detail_var = tk.StringVar(value="Configure a campaign, then start presentation.")
@@ -185,7 +185,7 @@ class PhyLabWindow:
         display.columnconfigure(1, weight=1)
         ttk.Label(display, text="Monitor").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
         ttk.Combobox(display, textvariable=self.display_var, values=display_labels, state="readonly", style="Lab.TCombobox").grid(row=0, column=1, columnspan=3, sticky="ew", pady=4)
-        ttk.Label(display, text="Marker").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(display, text="Marker (600 recommended)").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Combobox(display, textvariable=self.marker_var, values=MARKER_SIZES, state="readonly", width=8, style="Lab.TCombobox").grid(row=1, column=1, sticky="w", pady=4)
         ttk.Checkbutton(display, text="Fullscreen presentation", variable=self.fullscreen_var).grid(row=1, column=2, columnspan=2, sticky="e", pady=4)
 
