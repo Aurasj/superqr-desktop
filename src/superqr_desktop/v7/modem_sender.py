@@ -53,11 +53,13 @@ class V7ModemSender:
                 else:self._initial_done=True;self._repair_cursor=0
             return gid,sid
         gid=self._repair_cursor;sid=self._repair_next_ids[gid];self._repair_next_ids[gid]+=1;self._repair_cursor=(self._repair_cursor+1)%len(self.plans);return gid,sid
-    def next_physical_frame(self)->bytes:
+    def next_addressed_frame(self)->tuple[int,int,bytes]:
+        """Return one scheduled frame with identity, without snapshot polling."""
         gid,sid=self._take_next_address();frame=self.physical_frame(gid,sid);p=self.plans[gid];self._emitted+=1
         if sid<p.source_count:self._systematic+=1
         else:self._repair+=1
-        self._last_address=(gid,sid);return frame
+        self._last_address=(gid,sid);return gid,sid,frame
+    def next_physical_frame(self)->bytes:return self.next_addressed_frame()[2]
     def repair_frame(self,generation_id:int,repair_ordinal:int)->bytes:
         p=self.plans[generation_id]
         if repair_ordinal<0:raise ValueError("repair ordinal must be non-negative")
