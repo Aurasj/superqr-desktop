@@ -84,6 +84,23 @@ superqr-phy-lab --profile mono_64x50_matched --dwell 3 --frames 256
 superqr-phy-lab --profile qr_v27_l_safe --frames 256
 ```
 
+Normal physical campaigns are launched from **OPEN V7 PHYSICAL PHY LAB** in
+the Desktop app. The Tk controls and the SDL optical presenter run in separate
+processes so a blocking display swap cannot freeze Start/Stop, progress, or
+window interaction. The sender display is released while the lab owns
+fullscreen output and restored after the lab closes.
+
+For a native workstation runtime check (not headless CI), run:
+
+```powershell
+python scripts/phy_lab_ui_runtime_smoke.py --full-app
+python scripts/phy_lab_ui_runtime_smoke.py --full-app --frames 256 --stop-after 5
+```
+
+The smoke test enters the real app/lab path, automatically completes or stops
+the optical run, and reports Tk heartbeat gaps, Stop-handler latency,
+presentation cadence, timing verification, and parent/child process IDs.
+
 Profiles and deterministic vectors come from the canonical
 `superqr-protocol/test-vectors/v7-phy-selection/phase1_manifest.json`. Running
 the lab does not select or change the production V7 wire format.

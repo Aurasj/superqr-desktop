@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
+import multiprocessing
+import os
+import queue
 import secrets
 import threading
 import time
+from typing import Any, Callable
 
 import pygame
 
@@ -84,6 +88,19 @@ class RunPresentationResult:
     timing_note: str
 
 
+@dataclass(frozen=True)
+class CampaignLaunchConfig:
+    """Serializable boundary between the Tk controller and SDL presenter."""
+
+    runs: tuple[RunSpec, ...]
+    display_index: int
+    fullscreen: bool
+    marker_size: int
+    ready_seconds: float
+    done_seconds: float
+    first_run_token: int
+
+
 def build_campaign(preset: str, profile: str, dwell: int, frames: int) -> list[RunSpec]:
     all_profiles = list(grid_profiles()) + list(qr_controls())
     if preset == "Selected profile":
@@ -112,6 +129,7 @@ class Phase1CampaignPresenter:
         ready_seconds: float = 4.0,
         done_seconds: float = 2.0,
         first_run_token: int | None = None,
+        stop_requested: Callable[[], bool] | None = None,
     ):
         if not runs:
             raise ValueError("campaign must contain at least one run")
@@ -142,6 +160,7 @@ class Phase1CampaignPresenter:
         self._current_result_recorded = False
         self._presentation_finished = False
         self._stop_requested = False
+        self._external_stop_requested = stop_requested
 
     @property
     def spec(self) -> RunSpec:
@@ -150,11 +169,17 @@ class Phase1CampaignPresenter:
     def start(self) -> None:
         validate_grid_vectors()
         validate_qr_vectors()
+        if self._should_stop():
+            self.state = CampaignState.STOPPED
+            return
         pygame.init()
         self._prepare_run(0)
 
     def _prepare_run(self, index: int) -> None:
         self.state = CampaignState.PREPARING
+        if self._should_stop():
+            self.state = CampaignState.STOPPED
+            return
         self.run_number = index
         self.run_token = self.next_token
         self.next_token = (self.next_token % 0xFFFF) + 1
@@ -181,7 +206,7 @@ class Phase1CampaignPresenter:
             control = qr_controls()[spec.profile]
             quiet = int(control["quiet_zone_modules"])
             for frame_index in range(spec.frame_count):
-                if self._stop_requested:
+                if self._should_stop():
                     self.state = CampaignState.STOPPED
                     return
                 matrix = build_qr_matrix(
@@ -235,6 +260,9 @@ class Phase1CampaignPresenter:
     def tick(self) -> bool:
         """Present once. Returns False after a user close/escape request."""
         try:
+            if self._should_stop():
+                self.stop()
+                return False
             for event in pygame.event.get():
                 if event.type == pygame.QUIT or (
                     event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q)
@@ -367,6 +395,8 @@ class Phase1CampaignPresenter:
             "runs_total": len(self.runs),
             "runs": [asdict(result) for result in self.run_results],
             "current": asdict(self.snapshot()),
+            "runtime_isolation": "process" if self._external_stop_requested else "in_process",
+            "presenter_process_id": os.getpid(),
         }
 
     def stop(self) -> None:
@@ -380,54 +410,204 @@ class Phase1CampaignPresenter:
         """Signal lengthy frame preparation without touching SDL cross-thread."""
         self._stop_requested = True
 
+    def _should_stop(self) -> bool:
+        return self._stop_requested or (
+            self._external_stop_requested is not None and self._external_stop_requested()
+        )
+
+    def launch_config(self) -> CampaignLaunchConfig:
+        return CampaignLaunchConfig(
+            runs=tuple(self.runs),
+            display_index=self.display_index,
+            fullscreen=self.fullscreen,
+            marker_size=self.marker_size,
+            ready_seconds=self.ready_seconds,
+            done_seconds=self.done_seconds,
+            first_run_token=self.run_token or self.next_token,
+        )
+
+
+def _snapshot_to_wire(snapshot: PresentationSnapshot) -> dict[str, Any]:
+    payload = asdict(snapshot)
+    payload["state"] = snapshot.state.value
+    return payload
+
+
+def _snapshot_from_wire(payload: dict[str, Any]) -> PresentationSnapshot:
+    values = dict(payload)
+    values["state"] = CampaignState(values["state"])
+    return PresentationSnapshot(**values)
+
+
+def _publish_campaign_update(
+    updates: Any,
+    presenter: Phase1CampaignPresenter,
+    *,
+    final: bool = False,
+) -> None:
+    message = {
+        "snapshot": _snapshot_to_wire(presenter.snapshot()),
+        "export": presenter.export_payload(),
+        "final": final,
+    }
+    try:
+        updates.put_nowait(message)
+        return
+    except queue.Full:
+        pass
+    # Live telemetry is latest-value state, not an event log. Discarding one stale
+    # sample prevents display timing from ever waiting on a slow Tk consumer.
+    try:
+        updates.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        updates.put(message, timeout=0.1 if final else 0.0)
+    except queue.Full:
+        pass
+
+
+def _campaign_process_main(config: CampaignLaunchConfig, stop_event: Any, updates: Any) -> None:
+    """Child entry point: all SDL ownership and blocking swaps stay in this process."""
+    presenter = Phase1CampaignPresenter(
+        list(config.runs),
+        display_index=config.display_index,
+        fullscreen=config.fullscreen,
+        marker_size=config.marker_size,
+        ready_seconds=config.ready_seconds,
+        done_seconds=config.done_seconds,
+        first_run_token=config.first_run_token,
+        stop_requested=stop_event.is_set,
+    )
+    last_publish = 0.0
+    try:
+        presenter.start()
+        _publish_campaign_update(updates, presenter)
+        while not stop_event.is_set():
+            keep_running = presenter.tick()
+            now = time.perf_counter()
+            if now - last_publish >= 0.05 or not keep_running:
+                _publish_campaign_update(updates, presenter)
+                last_publish = now
+            if not keep_running:
+                break
+        if stop_event.is_set() and presenter.state not in (
+            CampaignState.DONE, CampaignState.ERROR, CampaignState.STOPPED,
+        ):
+            presenter.stop()
+    except Exception as exc:
+        presenter.error = f"{type(exc).__name__}: {exc}"
+        presenter.state = CampaignState.ERROR
+    finally:
+        if presenter.display is not None:
+            presenter.display.close()
+        _publish_campaign_update(updates, presenter, final=True)
+
 
 class Phase1CampaignWorker:
-    """Owns all Pygame calls on a dedicated presentation thread."""
+    """Runs Pygame/SDL outside Tk's process and exposes non-blocking snapshots."""
 
     def __init__(self, presenter: Phase1CampaignPresenter):
-        self.presenter = presenter
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._config = presenter.launch_config()
+        self._context = multiprocessing.get_context("spawn")
+        self._stop = self._context.Event()
+        self._updates = self._context.Queue(maxsize=8)
+        self._process: multiprocessing.Process | None = None
+        self._launch_thread: threading.Thread | None = None
+        self._launch_error: str | None = None
         self._snapshot: PresentationSnapshot | None = None
-        self._lock = threading.Lock()
+        self._export: dict[str, Any] | None = None
 
     def start(self) -> None:
-        if self._thread is not None:
+        if self._process is not None:
             raise RuntimeError("campaign worker already started")
-        self._thread = threading.Thread(target=self._run, name="superqr-phy-present", daemon=True)
-        self._thread.start()
+        self._process = self._context.Process(
+            target=_campaign_process_main,
+            args=(self._config, self._stop, self._updates),
+            name="superqr-phy-present",
+            daemon=False,
+        )
+        # Windows spawn may take hundreds of milliseconds on slower machines.
+        # Keep that syscall outside the Tk callback; this thread never owns SDL.
+        self._launch_thread = threading.Thread(
+            target=self._launch_process,
+            name="superqr-phy-launch",
+            daemon=True,
+        )
+        self._launch_thread.start()
 
-    def _run(self) -> None:
+    def _launch_process(self) -> None:
         try:
-            self.presenter.start()
-            while not self._stop.is_set():
-                keep_running = self.presenter.tick()
-                with self._lock:
-                    self._snapshot = self.presenter.snapshot()
-                if not keep_running:
-                    break
+            assert self._process is not None
+            self._process.start()
         except Exception as exc:
-            self.presenter.error = f"{type(exc).__name__}: {exc}"
-            self.presenter.state = CampaignState.ERROR
-        finally:
-            with self._lock:
-                self._snapshot = self.presenter.snapshot()
-            if self._stop.is_set():
-                self.presenter.stop()
+            self._launch_error = f"{type(exc).__name__}: {exc}"
+
+    def _drain_updates(self) -> None:
+        while True:
+            try:
+                message = self._updates.get_nowait()
+            except queue.Empty:
+                break
+            self._snapshot = _snapshot_from_wire(message["snapshot"])
+            self._export = message["export"]
 
     def snapshot(self) -> PresentationSnapshot | None:
-        with self._lock:
-            return self._snapshot
+        self._drain_updates()
+        if self._snapshot is None and self._launch_error is not None:
+            first = self._config.runs[0]
+            self._snapshot = PresentationSnapshot(
+                state=CampaignState.ERROR,
+                profile=first.profile,
+                dwell_epochs=first.dwell_epochs,
+                run_token=self._config.first_run_token,
+                run_number=1,
+                run_total=len(self._config.runs),
+                frame_index=0,
+                frame_count=first.frame_count,
+                ready_remaining_s=0.0,
+                present_count=0,
+                logical_fps=0.0,
+                present_fps=0.0,
+                late_presents=0,
+                render_prepare_ms=0.0,
+                timing_mode="UNKNOWN",
+                vsync_verified=False,
+                present_interval_ms=0.0,
+                timing_note="presentation process did not start",
+                error=self._launch_error,
+            )
+        return self._snapshot
 
     def export_payload(self) -> dict:
-        with self._lock:
-            return self.presenter.export_payload()
+        self._drain_updates()
+        if self._export is None:
+            raise RuntimeError("presentation has not published metrics yet")
+        return self._export
+
+    def is_alive(self) -> bool:
+        if self._launch_thread is not None and self._launch_thread.is_alive():
+            return True
+        return self._process is not None and self._process.is_alive()
+
+    def request_stop(self) -> None:
+        """Request shutdown without blocking the Tk event handler."""
+        self._stop.set()
 
     def stop(self, timeout: float = 3.0) -> None:
+        deadline = time.monotonic() + timeout
         self._stop.set()
-        self.presenter.request_stop()
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout)
-        if thread is not None and thread.is_alive():
-            raise RuntimeError("presentation thread did not stop")
+        launch_thread = self._launch_thread
+        if launch_thread is not None and launch_thread.is_alive():
+            launch_thread.join(max(0.0, deadline - time.monotonic()))
+        if launch_thread is not None and launch_thread.is_alive():
+            # The launch thread will observe the already-set stop event as soon
+            # as spawn returns. Avoid racing Process.is_alive() with start().
+            return
+        process = self._process
+        if process is not None and process.is_alive():
+            process.join(max(0.0, deadline - time.monotonic()))
+        if process is not None and process.is_alive():
+            process.terminate()
+            process.join(1.0)
+        self._drain_updates()

@@ -255,12 +255,61 @@ def test_presentation_worker_completes_without_tk_scheduler_and_exports_each_run
         payload = worker.export_payload()
         assert payload["schema"] == "superqr-phy-lab-sender-v2"
         assert payload["production_wire_frozen"] is False
+        assert payload["runtime_isolation"] == "process"
+        assert payload["presenter_process_id"] != os.getpid()
         assert payload["runs_completed"] == 1
         assert payload["runs"][0]["run_token"] == 0x4321
         assert payload["runs"][0]["present_count"] >= 11
         assert 50.0 <= payload["runs"][0]["present_fps"] <= 70.0
         assert payload["runs"][0]["late_presents"] == 0
         assert payload["runs"][0]["vsync_verified"]
+    finally:
+        worker.stop()
+
+
+def test_presentation_worker_stop_request_never_waits_for_display_shutdown():
+    presenter = Phase1CampaignPresenter(
+        [RunSpec("mono_64x50_matched", 3, 256)], display_index=0,
+        fullscreen=False, marker_size=400, ready_seconds=10.0, done_seconds=0.0,
+    )
+    worker = Phase1CampaignWorker(presenter)
+    try:
+        worker.start()
+        import time
+        deadline = time.monotonic() + 3.0
+        while worker.snapshot() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        started = time.monotonic()
+        worker.request_stop()
+        assert time.monotonic() - started < 0.05
+        deadline = time.monotonic() + 3.0
+        while worker.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not worker.is_alive()
+        assert worker.snapshot().state == CampaignState.STOPPED
+    finally:
+        worker.stop()
+
+
+def test_presentation_worker_sequences_all_canonical_profiles_and_tokens():
+    presenter = Phase1CampaignPresenter(
+        build_campaign("All canonical profiles", "mono_64x50_matched", 2, 1),
+        display_index=0, fullscreen=False, marker_size=400,
+        ready_seconds=0.0, done_seconds=0.0, first_run_token=0x7000,
+    )
+    worker = Phase1CampaignWorker(presenter)
+    try:
+        worker.start()
+        import time
+        deadline = time.monotonic() + 8.0
+        while worker.is_alive() and time.monotonic() < deadline:
+            worker.snapshot()
+            time.sleep(0.01)
+        assert not worker.is_alive()
+        payload = worker.export_payload()
+        assert payload["runs_completed"] == 7
+        assert [run["run_token"] for run in payload["runs"]] == list(range(0x7000, 0x7007))
+        assert payload["runs"][-1]["profile"] == "qr_v40_l_ceiling"
     finally:
         worker.stop()
 

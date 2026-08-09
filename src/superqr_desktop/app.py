@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import time
 import traceback
 import tkinter as tk
@@ -54,6 +55,7 @@ class ControlApp:
         self.root.geometry("570x790")
         self.root.minsize(540, 720)
         self.root.configure(bg="#11131a")
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.style = ttk.Style()
         self.style.theme_use("clam")
@@ -209,6 +211,9 @@ class ControlApp:
             self.phy_lab_window.window.lift()
             return
         self.sender.stop_transfer()
+        # The lab presenter owns SDL in a child process. Release the normal
+        # sender window first so fullscreen/exclusive mode has one clear owner.
+        self.display_controller.close()
         self.phy_lab_active = True
         self.phy_lab_window = open_phy_lab(self.root, on_close=self._phy_lab_closed)
 
@@ -465,12 +470,9 @@ class ControlApp:
         except Exception as exc:
             self._set_error(exc, "Could not export metrics")
 
-    def run(self):
-        while True:
-            try:
-                self.root.update()
-            except tk.TclError:
-                break
+    def _runtime_tick(self):
+        """Service the legacy sender without replacing Tk's native event loop."""
+        try:
             if not self.phy_lab_active and self.sender.transfer_state == "SENDING" and self.sender.total_frames:
                 now = time.monotonic()
                 if now - self.sender_last_tick >= self.sender.interval_ms / 1000.0:
@@ -481,11 +483,34 @@ class ControlApp:
                     except Exception as exc:
                         self.sender.stop_transfer(); self._set_error(exc)
             for event in (() if self.phy_lab_active else pygame.event.get()):
-                if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
-                    self.root.destroy(); pygame.quit(); return
+                if event.type == pygame.QUIT or (
+                    event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+                ):
+                    self.close()
+                    return
+            self.root.after(2, self._runtime_tick)
+        except tk.TclError:
+            return
+
+    def run(self):
+        self.root.after(0, self._runtime_tick)
+        self.root.mainloop()
+
+    def close(self):
+        if self.phy_lab_window is not None:
+            self.phy_lab_window.on_close = None
+            self.phy_lab_window.close()
+            self.phy_lab_window = None
+        self.display_controller.close()
+        pygame.quit()
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
 
 
 def main():
+    multiprocessing.freeze_support()
     contract, contract_hash = load_contract()
     ControlApp(contract, contract_hash).run()
 

@@ -127,3 +127,10 @@ class DisplayController:
         self.renderer.draw_grid_indexes(indexes)
         self.screen.fill((255, 255, 255))
         self._blit_renderer()
+
+    def close(self) -> None:
+        """Release the sender SDL window before another process owns a display."""
+        self.screen = None
+        self.renderer = None
+        if pygame.display.get_init():
+            pygame.display.quit()

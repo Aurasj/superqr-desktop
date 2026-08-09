@@ -32,8 +32,8 @@ class PhyLabWindow:
     def __init__(self, parent: tk.Tk, on_close=None):
         self.parent = parent
         self.on_close = on_close
-        self.presenter: Phase1CampaignPresenter | None = None
         self.worker: Phase1CampaignWorker | None = None
+        self._stop_pending = False
         detector = LabDisplayController()
         self.displays = detector.detect_displays()
         self.profiles = list(grid_profiles()) + list(qr_controls())
@@ -279,37 +279,42 @@ class PhyLabWindow:
         return int(found["index"]) if found else 0
 
     def start(self) -> None:
+        if self.worker is not None and self.worker.is_alive():
+            return
         if self.worker is not None:
-            self.worker.stop()
+            self.worker.stop(timeout=0.0)
         try:
             self._set_state("PREPARING", "Building the selected control frames. QR controls can take a moment.")
             self.window.update_idletasks()
-            self.presenter = Phase1CampaignPresenter(
+            presenter = Phase1CampaignPresenter(
                 self._runs(), display_index=self._display_index(),
                 fullscreen=self.fullscreen_var.get(), marker_size=int(self.marker_var.get()),
             )
-            self.worker = Phase1CampaignWorker(self.presenter)
+            self.worker = Phase1CampaignWorker(presenter)
             self.worker.start()
+            self._stop_pending = False
             self.start_button.configure(state="disabled")
             self.stop_button.configure(state="normal")
         except Exception as exc:
             self._set_state("ERROR", f"{type(exc).__name__}: {exc}")
-            self.presenter = None
+            self.worker = None
             self.start_button.configure(state="normal")
             self.stop_button.configure(state="disabled")
             messagebox.showerror("Physical PHY Lab", str(exc), parent=self.window)
 
     def stop(self) -> None:
         if self.worker is not None:
-            self.worker.stop()
-        self.start_button.configure(state="normal")
+            self.worker.request_stop()
+            self._stop_pending = True
+        self.start_button.configure(state="disabled")
         self.stop_button.configure(state="disabled")
-        self._set_state("STOPPED", "Presentation stopped. Configure or restart the campaign when ready.")
+        self._set_state("STOPPING", "Closing the optical window and saving final presentation metrics…")
 
     def _set_state(self, state: str, detail: str) -> None:
         colors = {
             "READY": "#f2cc60", "RUNNING": "#7ee787", "DONE": "#67c7ff",
-            "PREPARING": "#67c7ff", "ERROR": "#ff7070", "STOPPED": "#99a4bd",
+            "PREPARING": "#67c7ff", "STOPPING": "#f2cc60",
+            "ERROR": "#ff7070", "STOPPED": "#99a4bd",
         }
         self.state_var.set(state)
         self.state_detail_var.set(detail)
@@ -318,14 +323,17 @@ class PhyLabWindow:
     def _tick(self) -> None:
         if not self.window.winfo_exists():
             return
-        presenter = self.presenter
         worker = self.worker
         snapshot = worker.snapshot() if worker is not None else None
-        if presenter is not None and snapshot is not None and snapshot.state not in (CampaignState.STOPPED, CampaignState.ERROR):
+        if worker is not None and snapshot is not None:
             state = snapshot.state.value
             detail = f"{snapshot.profile} • dwell {snapshot.dwell_epochs} • run {snapshot.run_number} of {snapshot.run_total}"
             if snapshot.state == CampaignState.READY:
                 detail += f" • starts in {snapshot.ready_remaining_s:.1f} seconds"
+            elif snapshot.state == CampaignState.ERROR:
+                detail = snapshot.error or "Presentation process failed."
+            elif snapshot.state == CampaignState.STOPPED:
+                detail = "Presentation stopped. Configure or restart the campaign when ready."
             self._set_state(state, detail)
             self.run_identity_var.set(f"TOKEN {snapshot.run_token:04X}")
             complete = snapshot.frame_index + 1 if snapshot.state != CampaignState.DONE else snapshot.frame_count
@@ -341,16 +349,19 @@ class PhyLabWindow:
                 f"Presents {snapshot.present_count:,}  •  monitor {self.display_var.get()}  •  "
                 f"interval {snapshot.present_interval_ms:.2f} ms  •  {snapshot.timing_note}"
             )
-            if snapshot.state == CampaignState.DONE and snapshot.run_number == snapshot.run_total:
+            finished = not worker.is_alive()
+            if snapshot.state == CampaignState.DONE and snapshot.run_number == snapshot.run_total and finished:
                 self.start_button.configure(state="normal")
                 self.stop_button.configure(state="disabled")
-            if snapshot.state == CampaignState.ERROR:
+            if snapshot.state in (CampaignState.ERROR, CampaignState.STOPPED) and finished:
                 self.start_button.configure(state="normal")
                 self.stop_button.configure(state="disabled")
-        elif presenter is not None and presenter.state == CampaignState.ERROR:
-            self._set_state("ERROR", presenter.error or "Presentation failed")
+                self._stop_pending = False
+        elif worker is not None and not worker.is_alive() and self._stop_pending:
+            self._set_state("STOPPED", "Presentation stopped. Configure or restart the campaign when ready.")
             self.start_button.configure(state="normal")
             self.stop_button.configure(state="disabled")
+            self._stop_pending = False
         self.window.after(16, self._tick)
 
     def analyze(self) -> None:
@@ -372,7 +383,7 @@ class PhyLabWindow:
         self.analysis_text.configure(state="disabled")
 
     def export(self) -> None:
-        if self.presenter is None:
+        if self.worker is None:
             messagebox.showinfo("Physical PHY Lab", "Start a campaign before exporting sender metrics.", parent=self.window)
             return
         path = filedialog.asksaveasfilename(
@@ -380,13 +391,15 @@ class PhyLabWindow:
             filetypes=(("JSON", "*.json"),), initialfile="superqr-phy-lab-sender.json",
         )
         if path:
-            with open(path, "w", encoding="utf-8") as handle:
-                payload = self.worker.export_payload() if self.worker is not None else self.presenter.export_payload()
-                json.dump(payload, handle, indent=2, default=str)
+            try:
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(self.worker.export_payload(), handle, indent=2, default=str)
+            except Exception as exc:
+                messagebox.showerror("Physical PHY Lab", str(exc), parent=self.window)
 
     def close(self) -> None:
         if self.worker is not None:
-            self.worker.stop()
+            self.worker.stop(timeout=0.75)
         self.window.destroy()
         if self.on_close is not None:
             self.on_close()
