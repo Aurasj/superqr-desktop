@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 import secrets
+import threading
 import time
 
 import pygame
@@ -58,7 +59,29 @@ class PresentationSnapshot:
     late_presents: int
     render_prepare_ms: float
     timing_mode: str
+    vsync_verified: bool
+    present_interval_ms: float
+    timing_note: str
     error: str | None
+
+
+@dataclass(frozen=True)
+class RunPresentationResult:
+    profile: str
+    dwell_epochs: int
+    run_token: int
+    frame_count: int
+    elapsed_s: float
+    present_count: int
+    present_fps: float
+    interval_p95_ms: float
+    interval_max_ms: float
+    late_presents: int
+    estimated_skipped_refreshes: int
+    timing_mode: str
+    vsync_verified: bool
+    reported_refresh_hz: float
+    timing_note: str
 
 
 def build_campaign(preset: str, profile: str, dwell: int, frames: int) -> list[RunSpec]:
@@ -115,6 +138,9 @@ class Phase1CampaignPresenter:
         self.qr_ready: pygame.Surface | None = None
         self.qr_done: pygame.Surface | None = None
         self.error: str | None = None
+        self.run_results: list[RunPresentationResult] = []
+        self._current_result_recorded = False
+        self._presentation_finished = False
 
     @property
     def spec(self) -> RunSpec:
@@ -137,9 +163,13 @@ class Phase1CampaignPresenter:
         self.qr_native.clear()
         self.qr_ready = None
         self.qr_done = None
+        self._current_result_recorded = False
         spec = self.spec
-        self.display = LabDisplayController(dwell_epochs=spec.dwell_epochs)
-        self.display.setup_display(self.display_index, self.fullscreen, self.marker_size)
+        if self.display is None:
+            self.display = LabDisplayController(dwell_epochs=spec.dwell_epochs)
+            self.display.setup_display(self.display_index, self.fullscreen, self.marker_size)
+        else:
+            self.display.configure_dwell(spec.dwell_epochs)
         self.renderer = LabRenderer(self.marker_size)
         if spec.profile in grid_profiles():
             self.grid_sequence = GridFrameSequence(spec.profile)
@@ -230,6 +260,7 @@ class Phase1CampaignPresenter:
                     self.state = CampaignState.DONE
                     self.state_started = now
                     self._render(RunState.DONE)
+                    self._record_run_result(now)
                 else:
                     if self.grid_sequence is not None:
                         sequence_index, self.grid_matrix = self.grid_sequence.next_frame()
@@ -238,9 +269,12 @@ class Phase1CampaignPresenter:
                     self._render(RunState.RUNNING)
             elif self.state == CampaignState.DONE and now - self.state_started >= self.done_seconds:
                 if self.run_number + 1 < len(self.runs):
-                    assert self.display is not None
-                    self.display.close()
                     self._prepare_run(self.run_number + 1)
+                else:
+                    self._presentation_finished = True
+                    if self.display is not None:
+                        self.display.close()
+                    return False
             return True
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
@@ -282,11 +316,108 @@ class Phase1CampaignPresenter:
             present_fps=1000.0 / mean_interval if mean_interval > 0 else 0.0,
             late_presents=diag.late_present_count if diag else 0,
             render_prepare_ms=(self.renderer.timings.total_prepare_us / 1000.0) if self.renderer else 0.0,
-            timing_mode=diag.timing_mode.name if diag else "UNKNOWN",
+            timing_mode=(
+                "VSYNC_VERIFYING"
+                if diag and diag.timing_mode == TimingMode.VSYNC_MODE and not diag.vsync_verified
+                else diag.timing_mode.name if diag else "UNKNOWN"
+            ),
+            vsync_verified=diag.vsync_verified if diag else False,
+            present_interval_ms=diag.present_interval_ms if diag else 0.0,
+            timing_note=diag.timing_note if diag else "display not open",
             error=self.error,
         )
 
+    def _record_run_result(self, now: float) -> None:
+        if self._current_result_recorded or self.display is None:
+            return
+        diag = self.display.diag
+        intervals = sorted(diag.all_intervals)
+        p95_index = max(0, int(len(intervals) * 0.95 + 0.999) - 1)
+        p95 = intervals[p95_index] if intervals else 0.0
+        elapsed = max(0.0, now - self.run_started)
+        self.run_results.append(RunPresentationResult(
+            profile=self.spec.profile,
+            dwell_epochs=self.spec.dwell_epochs,
+            run_token=self.run_token,
+            frame_count=self.spec.frame_count,
+            elapsed_s=elapsed,
+            present_count=diag.present_count,
+            present_fps=diag.present_count / elapsed if elapsed else 0.0,
+            interval_p95_ms=p95,
+            interval_max_ms=max(intervals) if intervals else 0.0,
+            late_presents=diag.late_present_count,
+            estimated_skipped_refreshes=diag.estimated_skipped_refreshes,
+            timing_mode=diag.timing_mode.name,
+            vsync_verified=diag.vsync_verified,
+            reported_refresh_hz=diag.reported_refresh_hz,
+            timing_note=diag.timing_note,
+        ))
+        self._current_result_recorded = True
+
+    def export_payload(self) -> dict:
+        return {
+            "schema": "superqr-phy-lab-sender-v2",
+            "production_wire_frozen": False,
+            "state": self.state.value,
+            "runs_completed": len(self.run_results),
+            "runs_total": len(self.runs),
+            "runs": [asdict(result) for result in self.run_results],
+            "current": asdict(self.snapshot()),
+        }
+
     def stop(self) -> None:
-        self.state = CampaignState.STOPPED
+        if self.state != CampaignState.DONE:
+            self.state = CampaignState.STOPPED
         if self.display is not None:
             self.display.close()
+
+
+class Phase1CampaignWorker:
+    """Owns all Pygame calls on a dedicated presentation thread."""
+
+    def __init__(self, presenter: Phase1CampaignPresenter):
+        self.presenter = presenter
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._snapshot: PresentationSnapshot | None = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise RuntimeError("campaign worker already started")
+        self._thread = threading.Thread(target=self._run, name="superqr-phy-present", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            self.presenter.start()
+            while not self._stop.is_set():
+                keep_running = self.presenter.tick()
+                with self._lock:
+                    self._snapshot = self.presenter.snapshot()
+                if not keep_running:
+                    break
+        except Exception as exc:
+            self.presenter.error = f"{type(exc).__name__}: {exc}"
+            self.presenter.state = CampaignState.ERROR
+        finally:
+            with self._lock:
+                self._snapshot = self.presenter.snapshot()
+            if self._stop.is_set():
+                self.presenter.stop()
+
+    def snapshot(self) -> PresentationSnapshot | None:
+        with self._lock:
+            return self._snapshot
+
+    def export_payload(self) -> dict:
+        with self._lock:
+            return self.presenter.export_payload()
+
+    def stop(self, timeout: float = 3.0) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
+        if thread is not None and thread.is_alive():
+            raise RuntimeError("presentation thread did not stop")

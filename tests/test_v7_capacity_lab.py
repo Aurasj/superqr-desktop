@@ -12,6 +12,7 @@ from superqr_desktop.v7_capacity_lab.analysis import analyze_records
 from superqr_desktop.v7_capacity_lab.campaign import (
     CampaignState,
     Phase1CampaignPresenter,
+    Phase1CampaignWorker,
     RunSpec,
     build_campaign,
 )
@@ -166,6 +167,40 @@ def test_lab_display_close_is_idempotent():
     assert controller.screen is None
 
 
+def test_lab_display_extends_the_white_quiet_zone_to_the_screen():
+    pygame.display.init()
+    controller = LabDisplayController()
+    try:
+        controller.screen = pygame.display.set_mode((320, 240))
+        controller.marker_size = 100
+        marker = pygame.Surface((100, 100))
+        marker.fill((0, 0, 0))
+        controller.present(marker)
+        assert tuple(controller.screen.get_at((0, 0)))[:3] == (255, 255, 255)
+        assert tuple(controller.screen.get_at((160, 120)))[:3] == (0, 0, 0)
+    finally:
+        controller.close()
+
+
+def test_vsync_is_claimed_only_after_measured_refresh_cadence():
+    controller = LabDisplayController()
+    controller.diag.driver_vsync_reported = True
+    controller.diag.refresh_period_ms = 1000.0 / 60.0
+    for _ in range(12):
+        controller._verify_vsync(1000.0 / 60.0)
+    assert controller.diag.vsync_verified
+    assert controller.diag.actual_vsync_enabled
+
+    slow = LabDisplayController()
+    slow.diag.driver_vsync_reported = True
+    slow.diag.refresh_period_ms = 1000.0 / 60.0
+    for _ in range(12):
+        slow._verify_vsync(1000.0 / 48.0)
+    assert slow.diag.vsync_verified
+    assert not slow.diag.actual_vsync_enabled
+    assert slow.diag.timing_mode.name == "FALLBACK_TIMER_MODE"
+
+
 def test_physical_lab_ui_exposes_required_controls():
     import inspect
     from superqr_desktop.v7_capacity_lab.phy_lab_ui import PhyLabWindow
@@ -196,6 +231,38 @@ def test_grid_campaign_runs_ready_running_done_without_manual_input():
         assert snapshot.run_token == 0x1234
     finally:
         presenter.stop()
+
+
+def test_presentation_worker_completes_without_tk_scheduler_and_exports_each_run():
+    presenter = Phase1CampaignPresenter(
+        [RunSpec("mono_64x50_matched", 2, 6)], display_index=0,
+        fullscreen=False, marker_size=400, ready_seconds=0.3, done_seconds=0.0,
+        first_run_token=0x4321,
+    )
+    worker = Phase1CampaignWorker(presenter)
+    try:
+        worker.start()
+        import time
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            snapshot = worker.snapshot()
+            if snapshot is not None and snapshot.state == CampaignState.DONE:
+                break
+            time.sleep(0.01)
+        snapshot = worker.snapshot()
+        assert snapshot is not None
+        assert snapshot.state == CampaignState.DONE
+        payload = worker.export_payload()
+        assert payload["schema"] == "superqr-phy-lab-sender-v2"
+        assert payload["production_wire_frozen"] is False
+        assert payload["runs_completed"] == 1
+        assert payload["runs"][0]["run_token"] == 0x4321
+        assert payload["runs"][0]["present_count"] >= 11
+        assert 50.0 <= payload["runs"][0]["present_fps"] <= 70.0
+        assert payload["runs"][0]["late_presents"] == 0
+        assert payload["runs"][0]["vsync_verified"]
+    finally:
+        worker.stop()
 
 
 def test_log_analysis_excludes_rejected_frames_and_flags_frame_zero_wait():
