@@ -5,6 +5,7 @@ import secrets
 from typing import Iterator
 from .modem import DEFAULT_GENERATION_TARGET_BYTES,DEFAULT_PARITY_RATIO,GenerationLayout,GenerationPlan,build_modem_packet,coefficient_words,generation_layout,inner_fec_encode,symbol_payload_capacity
 from .package_stream import PreparedPackageSource
+MAX_PRODUCT_GENERATIONS=16_000_000
 @dataclass(frozen=True)
 class ModemSenderSnapshot:
     session_id:int;channel_bytes:int;parity_ratio:float;symbol_bytes:int;total_generations:int;schedule_phase:str;next_generation_id:int;next_symbol_id:int;last_generation_id:int|None;last_symbol_id:int|None;systematic_frames:int;repair_frames:int;emitted_frames:int;package_bytes:int;generation_bytes_resident:int
@@ -24,7 +25,9 @@ class V7ModemSender:
     def __init__(self,source:PreparedPackageSource,*,channel_bytes:int,parity_ratio:float=DEFAULT_PARITY_RATIO,target_generation_bytes:int=DEFAULT_GENERATION_TARGET_BYTES,session_id:int|None=None,initial_repair_fraction:float=.20):
         if not 0<=initial_repair_fraction<=2:raise ValueError("initial_repair_fraction outside 0..2")
         if target_generation_bytes!=DEFAULT_GENERATION_TARGET_BYTES:raise ValueError("DENSE_XOR_V1 generation target is fixed at 128 KiB")
-        self.source=source;self.channel_bytes=channel_bytes;self.parity_ratio=parity_ratio;self.symbol_bytes=symbol_payload_capacity(channel_bytes,parity_ratio);self.layout:GenerationLayout=generation_layout(source.size,self.symbol_bytes,target_generation_bytes);self.session_id=session_id or (secrets.randbits(32) or 1);self.initial_repair_fraction=initial_repair_fraction
+        self.source=source;self.channel_bytes=channel_bytes;self.parity_ratio=parity_ratio;self.symbol_bytes=symbol_payload_capacity(channel_bytes,parity_ratio);self.layout:GenerationLayout=generation_layout(source.size,self.symbol_bytes,target_generation_bytes)
+        if self.layout.total_generations>MAX_PRODUCT_GENERATIONS:raise ValueError("package exceeds the shared Android/Desktop generation safety limit")
+        self.session_id=session_id or (secrets.randbits(32) or 1);self.initial_repair_fraction=initial_repair_fraction
         self._loaded_generation=-1;self._symbols:tuple[bytes,...]=();self._symbol_ints:tuple[int,...]=();self._schedule_generation=0;self._schedule_symbol=0;self._initial_done=False;self._repair_cursor=0;self._repair_epoch=0;self._systematic=0;self._repair=0;self._emitted=0;self._last_address:tuple[int,int]|None=None;self._load_generation(0)
     @property
     def total_generations(self)->int:return self.layout.total_generations
