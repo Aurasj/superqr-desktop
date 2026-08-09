@@ -19,6 +19,10 @@ class V7ModemSender:
     """
     def __init__(self,source:PreparedPackageSource,*,channel_bytes:int,parity_ratio:float=DEFAULT_PARITY_RATIO,target_generation_bytes:int=DEFAULT_GENERATION_TARGET_BYTES,session_id:int|None=None,initial_repair_fraction:float=.20):
         if not 0<=initial_repair_fraction<=2:raise ValueError("initial_repair_fraction outside 0..2")
+        # DENSE_XOR_V1 makes the generation target part of its deterministic
+        # stream-offset contract. A different target needs a different codec id,
+        # not an invisible sender-only knob that Android could not reproduce.
+        if target_generation_bytes!=DEFAULT_GENERATION_TARGET_BYTES:raise ValueError("DENSE_XOR_V1 generation target is fixed at 128 KiB")
         self.source=source;self.channel_bytes=channel_bytes;self.parity_ratio=parity_ratio;self.symbol_bytes=symbol_payload_capacity(channel_bytes,parity_ratio);self.plans=plan_generations(source.size,self.symbol_bytes,target_generation_bytes);self.session_id=session_id or (secrets.randbits(32) or 1);self.initial_repair_fraction=initial_repair_fraction
         self._loaded_generation=-1;self._symbols:tuple[bytes,...]=();self._symbol_ints:tuple[int,...]=();self._schedule_generation=0;self._schedule_symbol=0;self._initial_done=False;self._repair_cursor=0;self._repair_next_ids=[self._initial_symbol_count(plan) for plan in self.plans];self._systematic=0;self._repair=0;self._emitted=0;self._last_address:tuple[int,int]|None=None;self._load_generation(0)
     def _initial_symbol_count(self,plan:GenerationPlan)->int:return plan.source_count+max(8,int(plan.source_count*self.initial_repair_fraction+.999))
