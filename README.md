@@ -4,6 +4,48 @@ SuperQR Desktop is the sender for offline screen-to-camera file transfer.
 
 The product UI is **V7 only**. The physically validated V6 visual carrier remains packaged as the acquisition/debug foundation, but there is no separate V6/V7 application mode.
 
+## Fresh clone — Windows
+
+Recommended prerequisite: **Python 3.11** and Git for Windows.
+
+```powershell
+git clone https://github.com/Aurasj/superqr-desktop.git
+cd superqr-desktop
+```
+
+Create a **new virtual environment** for this checkout:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+Verify the fresh clone:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Run SuperQR Desktop without activating the environment:
+
+```powershell
+.\.venv\Scripts\superqr-desktop.exe
+```
+
+Or activate it first:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+superqr-desktop
+```
+
+If PowerShell blocks activation, activation is optional; use the direct `.venv\Scripts\...` commands above.
+
+**Do not copy an old `.venv`.** It is local/generated state, is ignored by Git, and should be recreated after a fresh clone.
+
+This repository is self-contained for normal run/test/package workflows. It includes the packaged V6 contract and V7 Capacity Lab reference data; a sibling `superqr-protocol` checkout is optional for development cross-validation only.
+
 ## Current V7 baseline
 
 - adaptive optical profiles (40/48/56/64+ grids, 4- and experimental 8-color palettes);
@@ -18,14 +60,15 @@ Higher-density and 8-color profiles are experiments, not universal speed claims.
 
 ## Run
 
-```bash
-pip install -e .
+With the virtual environment active:
+
+```powershell
 superqr-desktop
 ```
 
 or:
 
-```bash
+```powershell
 python -m superqr_desktop.app
 ```
 
@@ -53,8 +96,8 @@ V6 remains frozen in protocol history as the validated compatibility/reference r
 
 ## Tests
 
-```bash
-pytest
+```powershell
+python -m pytest
 ```
 
-CI also builds the wheel/sdist and verifies packaged V6/V7 resources without requiring a sibling `superqr-protocol` checkout.
+CI checks out this repository from scratch, installs it, runs the test suite, builds wheel/sdist, creates a fresh virtual environment, installs the packaged wheel and verifies packaged V6/V7 resources without a sibling `superqr-protocol` checkout.
