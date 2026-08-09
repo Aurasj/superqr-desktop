@@ -141,6 +141,7 @@ class Phase1CampaignPresenter:
         self.run_results: list[RunPresentationResult] = []
         self._current_result_recorded = False
         self._presentation_finished = False
+        self._stop_requested = False
 
     @property
     def spec(self) -> RunSpec:
@@ -180,6 +181,9 @@ class Phase1CampaignPresenter:
             control = qr_controls()[spec.profile]
             quiet = int(control["quiet_zone_modules"])
             for frame_index in range(spec.frame_count):
+                if self._stop_requested:
+                    self.state = CampaignState.STOPPED
+                    return
                 matrix = build_qr_matrix(
                     control, frame_index, run_token=self.run_token,
                     frame_count=spec.frame_count, dwell_epochs=spec.dwell_epochs,
@@ -366,10 +370,15 @@ class Phase1CampaignPresenter:
         }
 
     def stop(self) -> None:
+        self._stop_requested = True
         if self.state != CampaignState.DONE:
             self.state = CampaignState.STOPPED
         if self.display is not None:
             self.display.close()
+
+    def request_stop(self) -> None:
+        """Signal lengthy frame preparation without touching SDL cross-thread."""
+        self._stop_requested = True
 
 
 class Phase1CampaignWorker:
@@ -416,6 +425,7 @@ class Phase1CampaignWorker:
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
+        self.presenter.request_stop()
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout)

@@ -265,6 +265,20 @@ def test_presentation_worker_completes_without_tk_scheduler_and_exports_each_run
         worker.stop()
 
 
+def test_campaign_stop_interrupts_qr_preparation_between_frames():
+    presenter = Phase1CampaignPresenter(
+        [RunSpec("qr_v40_l_ceiling", 3, 256)], display_index=0,
+        fullscreen=False, marker_size=400, ready_seconds=0.0, done_seconds=0.0,
+    )
+    try:
+        presenter.request_stop()
+        presenter.start()
+        assert presenter.state == CampaignState.STOPPED
+        assert presenter.qr_native == []
+    finally:
+        presenter.stop()
+
+
 def test_log_analysis_excludes_rejected_frames_and_flags_frame_zero_wait():
     base = {
         "run_id": "run-a", "completed_ns": 0, "observed_bits": 100,
