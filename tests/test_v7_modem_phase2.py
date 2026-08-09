@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import tempfile
 
 from superqr_desktop.v7.modem import (
     build_modem_packet,
@@ -95,6 +94,30 @@ def test_sender_keeps_generation_memory_bounded_and_has_no_exact_frame_carousel(
         assert first.source_count <= 256
         snapshot = sender.snapshot()
         assert snapshot.generation_bytes_resident <= 128 * 1024 + sender.symbol_bytes
+
+
+def test_sender_repair_sweep_covers_every_generation_with_unique_symbols(tmp_path):
+    path = tmp_path / "multi-generation.bin"
+    path.write_bytes(os.urandom(420000))
+    with PreparedPackageSource.prepare(str(path), allow_compression=False) as source:
+        sender = V7ModemSender(source, channel_bytes=400, session_id=0x51525354, initial_repair_fraction=0.0)
+        assert len(sender.plans) >= 5
+        initial_total = sum(plan.source_count + 8 for plan in sender.plans)
+        for _ in range(initial_total):
+            sender.next_physical_frame()
+        snapshot = sender.snapshot()
+        assert snapshot.schedule_phase == "REPAIR_SWEEP"
+        seen = []
+        for _ in range(len(sender.plans) * 2):
+            sender.next_physical_frame()
+            current = sender.snapshot()
+            seen.append((current.last_generation_id, current.last_symbol_id))
+        first_sweep = seen[:len(sender.plans)]
+        second_sweep = seen[len(sender.plans):]
+        assert [gid for gid, _ in first_sweep] == list(range(len(sender.plans)))
+        assert [gid for gid, _ in second_sweep] == list(range(len(sender.plans)))
+        assert all(first_sweep[index][1] + 1 == second_sweep[index][1] for index in range(len(sender.plans)))
+        assert len(set(seen)) == len(seen)
 
 
 def test_generation_planning_never_requires_whole_file_memory():
