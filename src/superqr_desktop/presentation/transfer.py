@@ -1,8 +1,10 @@
-"""Manages V7 transfer frame rendering to the optical output display."""
+"""Synchronous in-process V7 transfer frame rendering for manual navigation."""
 
 from __future__ import annotations
 
 import time
+
+import pygame
 
 from superqr_desktop.presentation.display import DisplayController
 from superqr_desktop.v7.profiles import OpticalProfile
@@ -10,7 +12,11 @@ from superqr_desktop.v7.renderer import V7TransferRenderer
 
 
 class TransferPresenter:
-    """Renders V7 transfer frames via the V7TransferRenderer onto the SDL display."""
+    """Renders V7 transfer frames to the main-process SDL display.
+
+    Used only for manual Prev/Next frame navigation. Active transfer
+    presentation runs in a child process via TransferPresentationWorker.
+    """
 
     def __init__(self, display: DisplayController):
         self._display = display
@@ -37,16 +43,12 @@ class TransferPresenter:
         screen.fill((8, 10, 14))
         screen.blit(surface, ((cw - marker) // 2, (ch - marker) // 2))
         flip_started_ns = time.perf_counter_ns()
-        import pygame
         pygame.display.flip()
         completed_ns = time.perf_counter_ns()
         return {
             "render_ms": (flip_started_ns - started_ns) / 1_000_000.0,
             "flip_ms": (completed_ns - flip_started_ns) / 1_000_000.0,
         }
-
-    def render_standby(self) -> None:
-        self._display.render_standby()
 
     def invalidate_renderer(self) -> None:
         self._renderer = None

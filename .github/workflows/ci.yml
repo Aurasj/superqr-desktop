@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, rebuild/v7-phase0-clean ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, rebuild/v7-phase0-clean ]
 
 jobs:
   test-and-package:

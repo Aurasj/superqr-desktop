@@ -1,18 +1,21 @@
-"""SuperQR V7 main control window with TRANSFER and PHASE 1 TEST modes."""
+"""SuperQR V7 main control window with TRANSFER and PHASE 1 TEST modes.
+
+Only one SDL display owner at a time: the transfer worker, the campaign
+worker, or the main process (for manual frame navigation / standby).
+"""
 
 from __future__ import annotations
 
-import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import pygame
 
-from superqr_desktop.campaign.controller import CampaignController
+from superqr_desktop.campaign.controller import CampaignController, CampaignLifecycle
 from superqr_desktop.diagnostics.collector import DiagnosticsCollector
 from superqr_desktop.presentation.display import DisplayController
 from superqr_desktop.presentation.transfer import TransferPresenter
-from superqr_desktop.transfer.controller import TransferController
+from superqr_desktop.transfer.controller import TransferController, TransferLifecycle
 from superqr_desktop.ui import styles
 from superqr_desktop.v7.profiles import BY_LABEL, PROFILES
 
@@ -23,13 +26,21 @@ class MainWindow:
     """Single clean SuperQR V7 desktop control application.
 
     Two modes:
-      TRANSFER    — file transfer via optical profile
-      PHASE 1 TEST — physical PHY campaign testing
+      TRANSFER    — file transfer via optical profile (child-process SDL)
+      PHASE 1 TEST — physical PHY campaign testing (child-process SDL)
     """
 
     def __init__(self, contract: dict, contract_hash: str):
         self.contract = contract
         self.contract_hash = contract_hash
+
+        # -- root window must exist before any Tk variables --
+        self.root = tk.Tk()
+        self.root.title("SuperQR V7")
+        self.root.geometry("570x700")
+        self.root.minsize(540, 640)
+        self.root.configure(bg=styles.BG)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         # -- back end --
         pygame.init()
@@ -42,7 +53,7 @@ class MainWindow:
 
         # -- UI state --
         self._mode = tk.StringVar(value="TRANSFER")
-        self._standby_rendered = False
+        self._display_owned_by_main = True
 
         # -- display vars --
         labels = [d["label"] for d in self.detected_displays]
@@ -50,13 +61,9 @@ class MainWindow:
         self._selected_size_var = tk.IntVar(value=800)
         self._window_mode_var = tk.StringVar(value="windowed")
 
-        # -- profile vars (mode-dependent) --
-        self._profile_var = tk.StringVar(value=PROFILES[0].label)
-        self._cadence_var = tk.StringVar(value="100 ms")
-        self._cadence_transfer_values = [f"{v} ms" for v in TransferController.INTERVAL_PRESETS]
-        self._cadence_campaign_values = ["2 epochs", "3 epochs"]
-
         # -- transfer vars --
+        self._transfer_profile_var = tk.StringVar(value=PROFILES[0].label)
+        self._transfer_cadence_var = tk.StringVar(value="100 ms")
         self._transfer_file_label = tk.StringVar(value="No file selected")
         self._transfer_meta_label = tk.StringVar(value="")
         self._transfer_progress_label = tk.StringVar(value="")
@@ -68,13 +75,7 @@ class MainWindow:
         self._campaign_dwell_var = tk.StringVar(value="3")
         self._campaign_progress_label = tk.StringVar(value="")
 
-        # -- build --
-        self.root = tk.Tk()
-        self.root.title("SuperQR V7")
-        self.root.geometry("570x700")
-        self.root.minsize(540, 640)
-        self.root.configure(bg=styles.BG)
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        # -- build UI --
         self._style = styles.setup_styles(self.root)
         self._build_ui()
         self._apply_display()
@@ -92,7 +93,7 @@ class MainWindow:
                   foreground=styles.MUTED).pack(anchor="w", pady=(0, 8))
 
         self._build_mode_toggle(main)
-        self._build_common_controls(main)
+        self._build_display_card(main)
         self._build_action_buttons(main)
         self._build_mode_panels(main)
         self._build_status_bar(main)
@@ -108,8 +109,7 @@ class MainWindow:
         self._btn_phase1.pack(side="left", fill="x", expand=True, padx=(4, 0))
         self._update_mode_button_styles()
 
-    def _build_common_controls(self, parent):
-        # -- display card --
+    def _build_display_card(self, parent):
         card = styles.card(parent, "DISPLAY")
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill="x")
@@ -136,30 +136,6 @@ class MainWindow:
                         variable=self._window_mode_var).pack(side="left", padx=(14, 0))
         ttk.Button(row, text="Apply", command=self._apply_display).pack(side="right")
 
-        # -- profile card --
-        card = styles.card(parent, "PROFILE")
-        row = ttk.Frame(card, style="Card.TFrame")
-        row.pack(fill="x")
-        ttk.Label(row, text="Profile", style="Card.TLabel").pack(side="left")
-        self._profile_combo = ttk.Combobox(
-            row, textvariable=self._profile_var,
-            values=[p.label for p in PROFILES], state="readonly", width=34,
-        )
-        self._profile_combo.pack(side="left", padx=8, fill="x", expand=True)
-        self._profile_combo.bind("<<ComboboxSelected>>", self._on_profile_changed)
-
-        row = ttk.Frame(card, style="Card.TFrame")
-        row.pack(fill="x", pady=(8, 0))
-        ttk.Label(row, text="Cadence", style="Card.TLabel").pack(side="left")
-        self._cadence_combo = ttk.Combobox(
-            row, textvariable=self._cadence_var,
-            values=self._cadence_transfer_values, state="readonly", width=12,
-        )
-        self._cadence_combo.pack(side="left", padx=8)
-        self._cadence_combo.bind("<<ComboboxSelected>>", self._on_cadence_changed)
-        self._lbl_profile_detail = ttk.Label(row, text="", style="Muted.TLabel")
-        self._lbl_profile_detail.pack(side="left", padx=8)
-
     def _build_action_buttons(self, parent):
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=5)
@@ -178,12 +154,38 @@ class MainWindow:
 
     def _build_transfer_panel(self, parent):
         card = styles.card(parent, "TRANSFER")
+        # profile
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill="x")
+        ttk.Label(row, text="Profile", style="Card.TLabel").pack(side="left")
+        self._transfer_profile_combo = ttk.Combobox(
+            row, textvariable=self._transfer_profile_var,
+            values=[p.label for p in PROFILES], state="readonly", width=24,
+        )
+        self._transfer_profile_combo.pack(side="left", padx=8, fill="x", expand=True)
+        self._transfer_profile_combo.bind("<<ComboboxSelected>>", self._on_transfer_profile_changed)
+        # cadence
+        row = ttk.Frame(card, style="Card.TFrame")
+        row.pack(fill="x", pady=(5, 0))
+        ttk.Label(row, text="Interval", style="Card.TLabel").pack(side="left")
+        values = [f"{v} ms" for v in TransferController.INTERVAL_PRESETS]
+        self._transfer_cadence_combo = ttk.Combobox(
+            row, textvariable=self._transfer_cadence_var,
+            values=values, state="readonly", width=10,
+        )
+        self._transfer_cadence_combo.pack(side="left", padx=8)
+        self._transfer_cadence_combo.bind("<<ComboboxSelected>>", self._on_transfer_cadence_changed)
+        self._lbl_transfer_detail = ttk.Label(row, text="", style="Muted.TLabel")
+        self._lbl_transfer_detail.pack(side="left", padx=8)
+
+        # file
+        row = ttk.Frame(card, style="Card.TFrame")
+        row.pack(fill="x", pady=(8, 0))
         ttk.Button(row, text="Select file", command=self._on_select_file).pack(
             side="left", fill="x", expand=True)
+        # nav
         nav = ttk.Frame(card, style="Card.TFrame")
-        nav.pack(fill="x", pady=(8, 0))
+        nav.pack(fill="x", pady=(5, 0))
         self._btn_prev = ttk.Button(nav, text="◀ Prev", command=self._on_prev_frame)
         self._btn_prev.pack(side="left", expand=True, fill="x", padx=(0, 4))
         self._btn_next = ttk.Button(nav, text="Next ▶", command=self._on_next_frame)
@@ -191,7 +193,7 @@ class MainWindow:
 
         self._lbl_file = ttk.Label(card, textvariable=self._transfer_file_label,
                                     style="Card.TLabel")
-        self._lbl_file.pack(anchor="w", pady=(9, 2))
+        self._lbl_file.pack(anchor="w", pady=(6, 2))
         self._lbl_meta = ttk.Label(card, textvariable=self._transfer_meta_label,
                                     style="Muted.TLabel")
         self._lbl_meta.pack(anchor="w")
@@ -201,6 +203,7 @@ class MainWindow:
 
     def _build_phase1_panel(self, parent):
         card = styles.card(parent, "PHASE 1 TEST")
+        # campaign preset
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill="x")
         ttk.Label(row, text="Campaign", style="Card.TLabel").pack(side="left")
@@ -210,7 +213,7 @@ class MainWindow:
         )
         self._campaign_preset_combo.pack(side="left", padx=8, fill="x", expand=True)
         self._campaign_preset_combo.bind("<<ComboboxSelected>>", self._on_campaign_preset_changed)
-
+        # candidate
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill="x", pady=(8, 0))
         ttk.Label(row, text="Candidate", style="Card.TLabel").pack(side="left")
@@ -220,7 +223,7 @@ class MainWindow:
         )
         self._campaign_candidate_combo.pack(side="left", padx=8, fill="x", expand=True)
         self._campaign_candidate_combo.bind("<<ComboboxSelected>>", self._on_campaign_candidate_changed)
-
+        # frames + dwell
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill="x", pady=(8, 0))
         ttk.Label(row, text="Frames", style="Card.TLabel").pack(side="left")
@@ -238,14 +241,14 @@ class MainWindow:
         )
         self._campaign_dwell_combo.pack(side="left", padx=8)
         self._campaign_dwell_combo.bind("<<ComboboxSelected>>", self._on_campaign_dwell_changed)
-
+        # run count
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill="x", pady=(8, 0))
         ttk.Label(row, text="Runs:", style="Card.TLabel").pack(side="left")
         self._lbl_run_count = ttk.Label(row, text=str(self.campaign_ctrl.run_count),
                                          style="Card.TLabel")
         self._lbl_run_count.pack(side="left", padx=8)
-
+        # progress
         self._lbl_campaign_progress = ttk.Label(
             card, textvariable=self._campaign_progress_label, style="Muted.TLabel",
         )
@@ -272,19 +275,15 @@ class MainWindow:
     def _switch_mode(self, mode: str):
         if self._mode.get() == mode:
             return
+        # stop whatever is running
         self._on_stop()
-        if self.campaign_ctrl.is_running:
-            self.campaign_ctrl.stop()
-            self._on_campaign_finished()
+        self._ensure_both_workers_stopped()
+        self._reclaim_main_display()
+
         self._mode.set(mode)
         self._update_mode_button_styles()
-        self._update_common_dropdowns_for_mode()
         self._swap_mode_panel()
         self._update_status()
-
-        if mode == "TRANSFER":
-            self.transfer_presenter.render_standby()
-            self._standby_rendered = True
         self._update_transfer_ui()
         self._update_campaign_ui()
 
@@ -296,19 +295,6 @@ class MainWindow:
             self._btn_transfer.configure(style="Mode.TButton")
             self._btn_phase1.configure(style="Accent.TButton")
 
-    def _update_common_dropdowns_for_mode(self):
-        if self._mode.get() == "TRANSFER":
-            self._profile_combo.configure(values=[p.label for p in PROFILES])
-            self._profile_var.set(self.transfer_ctrl.profile.label)
-            self._cadence_combo.configure(values=self._cadence_transfer_values)
-            self._cadence_var.set(f"{self.transfer_ctrl.interval_ms} ms")
-        else:
-            candidates = self.campaign_ctrl.available_profiles
-            self._profile_combo.configure(values=candidates)
-            self._profile_var.set(self.campaign_ctrl.profile)
-            self._cadence_combo.configure(values=self._cadence_campaign_values)
-            self._cadence_var.set(f"{self.campaign_ctrl.dwell} epochs")
-
     def _swap_mode_panel(self):
         self._transfer_panel.pack_forget()
         self._phase1_panel.pack_forget()
@@ -316,6 +302,14 @@ class MainWindow:
             self._transfer_panel.pack(fill="x")
         else:
             self._phase1_panel.pack(fill="x")
+
+    def _ensure_both_workers_stopped(self):
+        if self.campaign_ctrl.lifecycle not in (CampaignLifecycle.IDLE, CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED):
+            self.campaign_ctrl.request_stop()
+        self._drain_campaign_completion()
+        if self.transfer_ctrl.lifecycle not in (TransferLifecycle.IDLE, TransferLifecycle.COMPLETED, TransferLifecycle.FAILED):
+            self.transfer_ctrl.request_stop()
+        self._drain_transfer_completion()
 
     # ------------------------------------------------------------------
     # Actions
@@ -327,38 +321,21 @@ class MainWindow:
         except ValueError:
             pass
 
-    def _on_profile_changed(self, _event=None):
-        if self._mode.get() == "TRANSFER":
-            profile = BY_LABEL.get(self._profile_var.get())
-            if profile is None:
-                return
-            self.transfer_ctrl.set_profile(profile)
-            self.transfer_presenter.invalidate_renderer()
-            self.diag.reset()
-            if self.transfer_ctrl.has_file:
-                self._render_current_transfer_frame()
-            self._update_transfer_ui()
-        else:
-            self.campaign_ctrl.set_profile(self._profile_var.get())
-            self._update_campaign_ui()
+    def _on_transfer_profile_changed(self, _event=None):
+        profile = BY_LABEL.get(self._transfer_profile_var.get())
+        if profile is None:
+            return
+        self.transfer_ctrl.set_profile(profile)
+        self.transfer_presenter.invalidate_renderer()
+        self._update_transfer_ui()
 
-    def _on_cadence_changed(self, _event=None):
-        val = self._cadence_var.get()
-        if self._mode.get() == "TRANSFER":
-            try:
-                ms = int(val.replace(" ms", ""))
-                self.transfer_ctrl.set_interval(ms)
-                self.diag.reset()
-                self._update_transfer_ui()
-            except ValueError:
-                pass
-        else:
-            try:
-                epochs = int(val.replace(" epochs", ""))
-                self.campaign_ctrl.set_dwell(epochs)
-                self._update_campaign_ui()
-            except ValueError:
-                pass
+    def _on_transfer_cadence_changed(self, _event=None):
+        try:
+            ms = int(self._transfer_cadence_var.get().replace(" ms", ""))
+            self.transfer_ctrl.set_interval(ms)
+            self._update_transfer_ui()
+        except ValueError:
+            pass
 
     def _apply_display(self):
         try:
@@ -368,18 +345,14 @@ class MainWindow:
             metrics = self.display.setup_display(idx, fullscreen, marker)
             self.campaign_ctrl.set_display(idx, fullscreen, marker)
             self.transfer_presenter.invalidate_renderer()
-            self.diag.reset()
 
             canvas = self.display.screen.get_size()
             self._lbl_display_info.config(
                 text=f"Display {canvas[0]}×{canvas[1]}  •  marker {marker}px  "
                      f"•  active {metrics.active_width}×{metrics.active_height}",
             )
-            if self.transfer_ctrl.has_file:
-                self._render_current_transfer_frame()
-            else:
-                self.transfer_presenter.render_standby()
-                self._standby_rendered = True
+            self.display.render_standby()
+            self._display_owned_by_main = True
             self._update_status()
         except Exception as exc:
             self._set_error(exc)
@@ -392,10 +365,11 @@ class MainWindow:
 
     def _on_stop(self):
         if self._mode.get() == "TRANSFER":
-            self.transfer_ctrl.stop()
-            self._update_transfer_ui()
+            if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
+                self.transfer_ctrl.request_stop()
         else:
-            self.campaign_ctrl.request_stop()
+            if self.campaign_ctrl.lifecycle == CampaignLifecycle.RUNNING:
+                self.campaign_ctrl.request_stop()
 
     def _on_select_file(self):
         path = filedialog.askopenfilename()
@@ -403,63 +377,94 @@ class MainWindow:
             return
         try:
             self.transfer_ctrl.select_file(path)
-            self.diag.reset()
-            self._last_tick = time.monotonic()
-            self._render_current_transfer_frame()
+            self._render_manual_frame()
             self._update_transfer_ui()
         except Exception as exc:
             self._set_error(exc, "Could not prepare transfer")
 
     def _on_prev_frame(self):
-        if not self.transfer_ctrl.has_file:
+        if not self.transfer_ctrl.has_file or self.transfer_ctrl.lifecycle != TransferLifecycle.IDLE:
             return
-        self.transfer_ctrl.stop()
         self.transfer_ctrl.prev_frame()
-        self._render_current_transfer_frame()
+        self._render_manual_frame()
         self._update_transfer_ui()
 
     def _on_next_frame(self):
+        if not self.transfer_ctrl.has_file or self.transfer_ctrl.lifecycle != TransferLifecycle.IDLE:
+            return
+        self.transfer_ctrl.next_frame()
+        self._render_manual_frame()
+        self._update_transfer_ui()
+
+    def _render_manual_frame(self):
+        """Synchronous in-process frame render for manual nav. Only valid in IDLE."""
         if not self.transfer_ctrl.has_file:
             return
-        self.transfer_ctrl.stop()
-        self.transfer_ctrl.next_frame()
-        self._render_current_transfer_frame()
-        self._update_transfer_ui()
+        if not self._display_owned_by_main:
+            return
+        symbols = self.transfer_ctrl.get_frame_symbols()
+        timing = self.transfer_presenter.render_frame(
+            symbols, self.display.marker_size, self.transfer_ctrl.profile,
+        )
+        self.diag.record_present(timing["render_ms"], timing["flip_ms"])
 
     def _start_transfer(self):
         if not self.transfer_ctrl.has_file:
             messagebox.showwarning("SuperQR V7", "Select a file first.")
             return
-        self.transfer_ctrl.start()
-        self._last_tick = time.monotonic()
-        self.diag.reset()
-        self._render_current_transfer_frame()
-        self._update_transfer_ui()
+        if self.transfer_ctrl.lifecycle != TransferLifecycle.IDLE:
+            return
+
+        idx = self._selected_display_index()
+        marker = self._selected_size_var.get()
+        fullscreen = self._window_mode_var.get() == "fullscreen"
+
+        self.display.close()
+        self._display_owned_by_main = False
+
+        ok = self.transfer_ctrl.start_presenting(idx, fullscreen, marker)
+        if not ok:
+            self._reclaim_main_display()
+            messagebox.showwarning("SuperQR V7", "Could not start transfer.")
+            return
+        self._update_status()
 
     def _start_campaign(self):
-        if self.campaign_ctrl.is_running:
+        if self.campaign_ctrl.lifecycle != CampaignLifecycle.IDLE:
             return
+
+        idx = self._selected_display_index()
+        marker = self._selected_size_var.get()
+        fullscreen = self._window_mode_var.get() == "fullscreen"
+        self.campaign_ctrl.set_display(idx, fullscreen, marker)
+
         self.display.close()
-        self._standby_rendered = False
+        self._display_owned_by_main = False
+
         ok = self.campaign_ctrl.start()
         if not ok:
+            self._reclaim_main_display()
             messagebox.showwarning("SuperQR V7", "No campaign runs configured.")
             return
         self._update_status()
         self._update_campaign_ui()
 
+    def _reclaim_main_display(self):
+        """Reopen the main SDL display. Idempotent."""
+        if self._display_owned_by_main:
+            return
+        try:
+            self._apply_display()
+        except Exception as exc:
+            self._set_error(exc)
+
     def _on_campaign_preset_changed(self, _event=None):
         preset = self._campaign_preset_var.get()
         self.campaign_ctrl.set_preset(preset)
-        is_selected = (preset == "Selected profile")
-        self._campaign_candidate_combo.configure(
-            state="readonly" if is_selected else "disabled")
         self._update_campaign_ui()
 
     def _on_campaign_candidate_changed(self, _event=None):
         self.campaign_ctrl.set_profile(self._campaign_candidate_var.get())
-        if self._mode.get() == "PHASE1":
-            self._profile_var.set(self._campaign_candidate_var.get())
         self._update_campaign_ui()
 
     def _on_campaign_frames_changed(self, _event=None):
@@ -477,86 +482,93 @@ class MainWindow:
             pass
 
     # ------------------------------------------------------------------
-    # Rendering
-    # ------------------------------------------------------------------
-
-    def _render_current_transfer_frame(self):
-        if not self.transfer_ctrl.has_file:
-            return
-        symbols = self.transfer_ctrl.get_frame_symbols()
-        timing = self.transfer_presenter.render_frame(
-            symbols, self.display.marker_size, self.transfer_ctrl.profile,
-        )
-        self.diag.record_present(timing["render_ms"], timing["flip_ms"])
-        self._standby_rendered = False
-
-    # ------------------------------------------------------------------
     # Tick loop
     # ------------------------------------------------------------------
 
     def _tick(self):
         try:
-            if self._mode.get() == "TRANSFER":
-                self._tick_transfer()
-            else:
-                self._tick_phase1()
+            self.campaign_ctrl.poll()
+            self.transfer_ctrl.poll()
 
-            # process pygame events (only when main process owns SDL)
-            if not self.campaign_ctrl.is_running:
+            # campaign display reclaim
+            if self.campaign_ctrl.needs_display_reclaim:
+                snapshot = self.campaign_ctrl.reclaim_display()
+                self._reclaim_main_display()
+                if snapshot is not None and snapshot.error:
+                    self._lbl_err.config(text=f"Campaign error: {snapshot.error}")
+                self._update_campaign_ui()
+                self._update_status()
+
+            # transfer display reclaim
+            if self.transfer_ctrl.needs_display_reclaim:
+                self.transfer_ctrl.reclaim_display()
+                self._reclaim_main_display()
+                self._update_transfer_ui()
+                self._update_status()
+
+            # campaign progress
+            if self.campaign_ctrl.lifecycle in (CampaignLifecycle.STARTING, CampaignLifecycle.RUNNING):
+                snap = self.campaign_ctrl.snapshot()
+                if snap is not None:
+                    self._campaign_progress_label.set(
+                        f"Run {snap.run_number}/{snap.run_total}  "
+                        f"•  frame {snap.frame_index + 1}/{snap.frame_count}  "
+                        f"•  {snap.state.value}  "
+                        f"•  {snap.present_fps:.1f} fps",
+                    )
+                    if snap.error:
+                        self._lbl_err.config(text=f"Error: {snap.error}")
+                    self._update_status()
+
+            # transfer progress
+            if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
+                snap = self.transfer_ctrl.snapshot()
+                if snap is not None:
+                    self._transfer_progress_label.set(
+                        f"Session  •  frame {snap.current_frame_idx + 1}/{snap.total_frames}  "
+                        f"•  {snap.present_count} presents  "
+                        f"•  {snap.profile_key}",
+                    )
+
+            # pygame events (only when main process owns SDL)
+            if self._display_owned_by_main:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT or (
                         event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
                     ):
                         self.close()
                         return
+
             self.root.after(2, self._tick)
         except tk.TclError:
             return
 
-    def _tick_transfer(self):
-        if self.transfer_ctrl.state == "SENDING" and self.transfer_ctrl.has_file:
-            now = time.monotonic()
-            if now - getattr(self, "_last_tick", 0) >= self.transfer_ctrl.interval_ms / 1000.0:
-                self._last_tick = now
-                self.transfer_ctrl.advance_frame()
-                try:
-                    self._render_current_transfer_frame()
-                    self._update_transfer_ui()
-                except Exception as exc:
-                    self.transfer_ctrl.stop()
-                    self._set_error(exc)
+    def _drain_campaign_completion(self):
+        """Block until the campaign worker finishes (with timeout)."""
+        import time
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            self.campaign_ctrl.poll()
+            if self.campaign_ctrl.needs_display_reclaim:
+                self.campaign_ctrl.reclaim_display()
+                break
+            if self.campaign_ctrl.lifecycle == CampaignLifecycle.IDLE:
+                break
+            time.sleep(0.05)
+            self.root.update()
 
-    def _tick_phase1(self):
-        if not self.campaign_ctrl.is_running:
-            return
-        snapshot = self.campaign_ctrl.snapshot()
-        if snapshot is not None:
-            self._campaign_progress_label.set(
-                f"Run {snapshot.run_number}/{snapshot.run_total}  "
-                f"•  frame {snapshot.frame_index + 1}/{snapshot.frame_count}  "
-                f"•  {snapshot.state.value}  "
-                f"•  {snapshot.present_fps:.1f} fps",
-            )
-            if snapshot.error:
-                self._lbl_err.config(text=f"Error: {snapshot.error}")
-            self._update_status()
-
-        if not self.campaign_ctrl.is_running:
-            # campaign finished or stopped — reclaim display
-            self._on_campaign_finished()
-
-    def _on_campaign_finished(self):
-        snapshot = self.campaign_ctrl.snapshot()
-        self.campaign_ctrl.stop()
-        try:
-            self._apply_display()
-        except Exception as exc:
-            self._set_error(exc)
-        if snapshot is not None:
-            if snapshot.error:
-                self._lbl_err.config(text=f"Campaign error: {snapshot.error}")
-            elif snapshot.state.value == "DONE":
-                self._lbl_err.config(text="Campaign completed.")
+    def _drain_transfer_completion(self):
+        import time
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            self.transfer_ctrl.poll()
+            if self.transfer_ctrl.needs_display_reclaim:
+                self.transfer_ctrl.reclaim_display()
+                break
+            if self.transfer_ctrl.lifecycle == TransferLifecycle.IDLE:
+                break
+            time.sleep(0.05)
+            self.root.update()
 
     # ------------------------------------------------------------------
     # UI updates
@@ -565,7 +577,7 @@ class MainWindow:
     def _update_transfer_ui(self):
         ctrl = self.transfer_ctrl
         p = ctrl.profile
-        self._lbl_profile_detail.config(
+        self._lbl_transfer_detail.config(
             text=f"{p.frame_size} B/frame  •  cell {p.cell_width:.1f}×{p.cell_height:.1f}px @ 1000",
         )
         if ctrl.has_file:
@@ -586,8 +598,9 @@ class MainWindow:
             )
             self._transfer_progress_label.set("")
 
-        # frame nav buttons
-        can_nav = ctrl.has_file and ctrl.state != "SENDING"
+        # frame nav: only in IDLE with a file loaded and main owns display
+        can_nav = (ctrl.has_file and ctrl.lifecycle == TransferLifecycle.IDLE
+                   and self._display_owned_by_main)
         state = "normal" if can_nav else "disabled"
         self._btn_prev.configure(state=state)
         self._btn_next.configure(state=state)
@@ -602,24 +615,22 @@ class MainWindow:
             state="readonly" if is_selected else "disabled",
         )
 
-        if not ctrl.is_running:
-            p = ctrl.profile
-            self._lbl_profile_detail.config(text=f"Candidate: {p}")
+        if ctrl.lifecycle == CampaignLifecycle.IDLE:
             self._campaign_progress_label.set(
                 f"{ctrl.run_count} run(s) queued  •  {ctrl.frames} frames/run  •  dwell {ctrl.dwell}",
             )
 
     def _update_status(self):
-        if self.campaign_ctrl.is_running:
-            snap = self.campaign_ctrl.snapshot()
-            if snap is not None:
-                self._lbl_status.config(
-                    text=snap.state.value, foreground=styles.ACCENT,
-                )
-            else:
-                self._lbl_status.config(text="STARTING", foreground=styles.WARN)
-        elif self._mode.get() == "TRANSFER" and self.transfer_ctrl.state == "SENDING":
-            self._lbl_status.config(text="SENDING", foreground=styles.ACCENT)
+        # priorities: campaign/transfer lifecycle > mode idle
+        cl = self.campaign_ctrl.lifecycle
+        tl = self.transfer_ctrl.lifecycle
+
+        if cl == CampaignLifecycle.IDLE and tl == TransferLifecycle.IDLE:
+            self._lbl_status.config(text="READY", foreground=styles.GOOD)
+        elif cl not in (CampaignLifecycle.IDLE, CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED):
+            self._lbl_status.config(text=cl.value, foreground=styles.ACCENT)
+        elif tl not in (TransferLifecycle.IDLE, TransferLifecycle.COMPLETED, TransferLifecycle.FAILED):
+            self._lbl_status.config(text=tl.value, foreground=styles.ACCENT)
         else:
             self._lbl_status.config(text="READY", foreground=styles.GOOD)
 
@@ -651,7 +662,10 @@ class MainWindow:
         self.root.mainloop()
 
     def close(self):
-        self.campaign_ctrl.stop()
+        self.campaign_ctrl.request_stop()
+        self.transfer_ctrl.request_stop()
+        self._drain_campaign_completion()
+        self._drain_transfer_completion()
         self.display.close()
         pygame.quit()
         try:

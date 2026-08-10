@@ -82,6 +82,13 @@ def test_app_has_single_product_entry_point_without_mode_selector():
     # must expose the two new modes
     assert "TRANSFER" in source
     assert "PHASE 1 TEST" in source
+    # common section is DISPLAY only; profile controls are mode-specific
+    assert "DISPLAY" in source
+    # transfer panel owns its profile
+    assert "_transfer_profile_combo" in source
+    # campaign panel owns candidate and dwell
+    assert "_campaign_candidate_combo" in source
+    assert "_campaign_dwell_combo" in source
 
 
 def test_phase1_manifest_and_vectors_are_packaged_and_valid():
