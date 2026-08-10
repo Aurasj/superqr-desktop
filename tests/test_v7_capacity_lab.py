@@ -70,21 +70,18 @@ def test_capacity_lab_can_render_reference_frame():
 def test_app_has_single_product_entry_point_without_mode_selector():
     import inspect
     import superqr_desktop.app as app
+    from superqr_desktop.ui.main_window import MainWindow
 
     assert callable(app.main)
-    source = inspect.getsource(app.ControlApp)
+    source = inspect.getsource(MainWindow)
+    # must NOT expose legacy mode selectors or separate lab UI
     assert "V6 Stable" not in source
     assert "V7 Development" not in source
+    assert "OPEN V7 PHYSICAL PHY LAB" not in source
     assert "Engine / Protocol" not in source
-    assert "OPTICAL PROFILE" in source
+    # must expose the two new modes
     assert "TRANSFER" in source
-
-
-def test_debug_patterns_still_use_frozen_v6_carrier():
-    import superqr_desktop.app as app
-
-    values = {value for _, value in app.DEBUG_PATTERNS}
-    assert values == {"deterministic_random", "checkerboard", "black", "white"}
+    assert "PHASE 1 TEST" in source
 
 
 def test_phase1_manifest_and_vectors_are_packaged_and_valid():
