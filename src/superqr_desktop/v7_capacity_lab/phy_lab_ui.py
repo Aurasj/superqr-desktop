@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -16,6 +17,7 @@ from superqr_desktop.v7_capacity_lab.campaign import (
     build_campaign,
 )
 from superqr_desktop.v7_capacity_lab.lab_display import LabDisplayController
+from superqr_desktop.v7_capacity_lab.baseline_worker import BaselineWorker
 from superqr_desktop.v7_capacity_lab.phase1_profiles import grid_profiles, qr_controls
 
 
@@ -245,6 +247,7 @@ class PhyLabWindow:
         ttk.Button(actions, text="Open PC camera receiver", command=self.open_camera_receiver).pack(side="left")
         ttk.Button(actions, text="Analyze Android JSONL…", command=self.analyze).pack(side="left")
         ttk.Button(actions, text="Export sender metrics…", command=self.export).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="DIGITAL BASELINE…", command=self.run_baseline).pack(side="left", padx=(8, 0))
         self.analysis_text = tk.Text(
             analysis_tab, height=7, wrap="word", relief="flat",
             bg="#101620", fg="#dce7f7", insertbackground="white",
@@ -409,6 +412,69 @@ class PhyLabWindow:
                     json.dump(self.worker.export_payload(), handle, indent=2, default=str)
             except Exception as exc:
                 messagebox.showerror("Physical PHY Lab", str(exc), parent=self.window)
+
+    def run_baseline(self) -> None:
+        """Run the 256-frame digital baseline for all seven canonical profiles."""
+        out_dir = filedialog.askdirectory(
+            parent=self.window, title="Digital baseline output directory",
+        )
+        if not out_dir:
+            return
+        self._set_analysis("DIGITAL BASELINE running…\nRendering and validating all 7 profiles × 256 frames.\nThis may take several minutes.")
+        self.window.update_idletasks()
+
+        def _runner() -> None:
+            try:
+                def _progress(idx: int, total: int, profile: str, stage: str) -> None:
+                    self.window.after(0, lambda: self._set_analysis(
+                        f"DIGITAL BASELINE running…\n"
+                        f"[{idx + 1}/{total}] {profile}: {stage}…\n"
+                    ))
+                worker = BaselineWorker(
+                    out_dir, frame_count=256,
+                    progress_callback=_progress,
+                )
+                report = worker.run()
+                text = self._format_baseline(report)
+                self.window.after(0, lambda: self._set_analysis(text))
+                self.window.after(0, lambda: messagebox.showinfo(
+                    "Digital Baseline",
+                    f"Baseline complete.\n{len(report.profiles)} profiles.\n"
+                    f"Results: {out_dir}/baseline_results.json\n"
+                    f"Events: {out_dir}/baseline_events.jsonl",
+                    parent=self.window,
+                ))
+            except Exception as exc:
+                self.window.after(0, lambda: messagebox.showerror(
+                    "Digital Baseline", str(exc), parent=self.window,
+                ))
+
+        threading.Thread(target=_runner, name="superqr-baseline", daemon=True).start()
+
+    @staticmethod
+    def _format_baseline(report: "CampaignBaselineReport") -> str:
+        lines = [
+            f"DIGITAL BASELINE — {report.peak_rss_mib:.1f} MiB peak — "
+            f"{report.artifact_size_bytes / 1024:.0f} KiB artifacts\n",
+        ]
+        for pr in report.profiles:
+            st = "PASS" if pr.sender_truth and pr.sender_truth.passed else "FAIL"
+            rr = "PASS" if pr.receiver_replay and pr.receiver_replay.passed else "FAIL"
+            rr_detail = pr.receiver_replay
+            lines.append(
+                f"{pr.profile}: sender-truth {st}  receiver-replay {rr}  "
+                f"events={pr.event_count}  pngs={pr.unique_pngs}  "
+                f"render={pr.render_time_s:.1f}s"
+            )
+            if rr_detail and not rr_detail.passed:
+                lines.append(
+                    f"  decoded={rr_detail.decoded}/{rr_detail.expected}  "
+                    f"raw_valid={rr_detail.raw_valid}/{rr_detail.expected}  "
+                    f"BER={rr_detail.ber:.4f}  erasures={rr_detail.erasure_rate:.4f}  "
+                    f"acq_fail={rr_detail.acquisition_failures}  "
+                    f"failures={rr_detail.failure_reasons or 'none'}"
+                )
+        return "\n".join(lines)
 
     def close(self) -> None:
         if self.worker is not None:

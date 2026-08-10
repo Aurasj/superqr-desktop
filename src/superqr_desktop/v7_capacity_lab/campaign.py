@@ -27,7 +27,6 @@ from superqr_desktop.v7_capacity_lab.phase1_profiles import (
 )
 from superqr_desktop.v7_capacity_lab.protocol_bridge import load_phy_selection_manifest
 from superqr_desktop.v7_capacity_lab.run_sync import RunState
-from superqr_desktop.v7_capacity_lab.capture_harness import CaptureRecorder
 
 
 class CampaignState(str, Enum):
@@ -131,7 +130,6 @@ class Phase1CampaignPresenter:
         done_seconds: float = 2.0,
         first_run_token: int | None = None,
         stop_requested: Callable[[], bool] | None = None,
-        capture_recorder: "CaptureRecorder | None" = None,
     ):
         if not runs:
             raise ValueError("campaign must contain at least one run")
@@ -163,7 +161,6 @@ class Phase1CampaignPresenter:
         self._presentation_finished = False
         self._stop_requested = False
         self._external_stop_requested = stop_requested
-        self._capture = capture_recorder
 
     @property
     def spec(self) -> RunSpec:
@@ -175,8 +172,6 @@ class Phase1CampaignPresenter:
         if self._should_stop():
             self.state = CampaignState.STOPPED
             return
-        if self._capture is not None:
-            self._capture.start()
         pygame.init()
         self._prepare_run(0)
 
@@ -234,11 +229,6 @@ class Phase1CampaignPresenter:
         self.state = CampaignState.READY
         self.state_started = time.perf_counter()
         self._render(RunState.READY)
-        if self._capture is not None:
-            self._capture.start_run(
-                self.run_token, spec.profile, spec.frame_count,
-                spec.dwell_epochs, time.perf_counter_ns(),
-            )
 
     def _render(self, state: RunState) -> None:
         assert self.renderer is not None
@@ -266,18 +256,6 @@ class Phase1CampaignPresenter:
                 native = self.qr_native[self.frame_index]
             assert native is not None
             self.renderer.prepare_qr_native_surface(native)
-
-        if self._capture is not None and self.renderer.cached_frame_display is not None:
-            self._capture.record_logical_frame(
-                self.renderer.cached_frame_display,
-                run_token=self.run_token,
-                profile=spec.profile,
-                frame_index=self.frame_index,
-                frame_count=spec.frame_count,
-                dwell_epochs=spec.dwell_epochs,
-                state=state.name,
-                present_timestamp_ns=time.perf_counter_ns(),
-            )
 
     def tick(self) -> bool:
         """Present once. Returns False after a user close/escape request."""
@@ -407,8 +385,6 @@ class Phase1CampaignPresenter:
             timing_note=diag.timing_note,
         ))
         self._current_result_recorded = True
-        if self._capture is not None:
-            self._capture.finish_run(time.perf_counter_ns())
 
     def export_payload(self) -> dict:
         qr_layouts = {}
@@ -434,11 +410,6 @@ class Phase1CampaignPresenter:
             "runtime_isolation": "process" if self._external_stop_requested else "in_process",
             "presenter_process_id": os.getpid(),
         }
-        if self._capture is not None:
-            payload["capture"] = {
-                "enabled": True,
-                "frame_count": self._capture.frame_count,
-            }
         return payload
 
     def stop(self) -> None:
@@ -447,8 +418,6 @@ class Phase1CampaignPresenter:
             self.state = CampaignState.STOPPED
         if self.display is not None:
             self.display.close()
-        if self._capture is not None:
-            self._capture.stop(join=False)
 
     def request_stop(self) -> None:
         """Signal lengthy frame preparation without touching SDL cross-thread."""
