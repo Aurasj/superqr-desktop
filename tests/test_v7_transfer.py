@@ -78,7 +78,7 @@ def test_streaming_sender_reconstructs_exact_package(tmp_path):
     sender = V7SenderSession()
     sender.prepare_transfer(str(path))
     assert sender.interval_ms == 100
-    assert sender.transfer_state == "SENDING"
+    assert sender.transfer_state == "READY"
     assert sender.total_frames >= 1
     payloads = []
     for frame_id in range(sender.total_frames):
@@ -89,6 +89,26 @@ def test_streaming_sender_reconstructs_exact_package(tmp_path):
     package = parse_package(b"".join(payloads))
     assert package.filename == "sample.bin"
     assert package.file_data == data
+
+
+def test_prepare_start_stop_restart_lifecycle(tmp_path):
+    path = tmp_path / "tiny.bin"
+    path.write_bytes(b"lifecycle")
+    sender = V7SenderSession()
+
+    sender.prepare_transfer(str(path))
+    assert sender.transfer_state == "READY"
+    assert sender.current_frame_idx == 0
+
+    assert sender.start_transfer() is True
+    assert sender.transfer_state == "SENDING"
+    sender.advance_frame()
+    sender.stop_transfer()
+    assert sender.transfer_state == "STOPPED"
+
+    assert sender.start_transfer() is True
+    assert sender.transfer_state == "SENDING"
+    assert sender.current_frame_idx == 0
 
 
 def test_sender_matrix_matches_selected_profile(tmp_path):
@@ -124,3 +144,4 @@ def test_switching_profile_recomputes_transfer_geometry(tmp_path):
     sender.set_profile("turbo_64_4")
     assert sender.total_frames < safe_frames
     assert sender.profile.grid == 64
+    assert sender.transfer_state == "READY"
