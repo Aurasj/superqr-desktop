@@ -36,7 +36,19 @@ def setup_styles(root: tk.Tk) -> ttk.Style:
                     font=("Segoe UI", 10, "bold"), padding=9)
     style.map("Accent.TButton", background=[("active", "#2f74b5")])
     style.configure("Mode.TButton", font=("Segoe UI", 10, "bold"), padding=10)
-    style.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2, foreground=TEXT)
+    style.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2, foreground=TEXT,
+                    selectbackground="#245b8f", selectforeground="#ffffff",
+                    insertbackground=TEXT)
+    style.map("TCombobox",
+              fieldbackground=[("readonly", PANEL2)],
+              foreground=[("readonly", TEXT)])
+
+    # Dark combobox dropdown — the popdown listbox is OS-owned but tk option
+    # database entries give us control on most platforms.
+    root.option_add("*TCombobox*Listbox.background", PANEL2)
+    root.option_add("*TCombobox*Listbox.foreground", TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", "#245b8f")
+    root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
     style.configure("TRadiobutton", background=PANEL, foreground=TEXT)
     style.configure("TCheckbutton", background=BG, foreground=TEXT)
     return style
