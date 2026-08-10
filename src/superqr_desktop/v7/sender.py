@@ -77,9 +77,10 @@ class V7SenderSession:
         self.total_frames = total_frames
         self.current_frame_idx = 0
 
-        # Selecting a file is the send action. A prepared transfer immediately
-        # enters the carousel so frame 0 cannot remain parked indefinitely.
-        self.transfer_state = "SENDING"
+        # File selection prepares a deterministic carousel but does not claim
+        # that anything is already being shown on the optical display.  The UI
+        # owns the actual START transition and presentation cadence.
+        self.transfer_state = "READY"
         return self.session_id
 
     def _read_package_slice(self, offset: int, length: int) -> bytes:
@@ -128,7 +129,7 @@ class V7SenderSession:
         return SymbolMatrix(rows=g, cols=g, palette_name=self.profile.palette_name, symbols=rows)
 
     def start_transfer(self) -> bool:
-        if self.total_frames < 1:
+        if self.total_frames < 1 or self.transfer_state not in ("READY", "STOPPED"):
             return False
         self.transfer_state = "SENDING"
         self.current_frame_idx = 0
