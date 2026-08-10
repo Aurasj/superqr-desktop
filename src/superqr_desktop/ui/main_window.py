@@ -18,6 +18,15 @@ from superqr_desktop.presentation.transfer import TransferPresenter
 from superqr_desktop.transfer.controller import TransferController, TransferLifecycle
 from superqr_desktop.ui import styles
 from superqr_desktop.v7.profiles import BY_LABEL, PROFILES
+from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
+from superqr_desktop.v7_capacity_lab.phase1_profiles import (
+    GridFrameSequence,
+    build_qr_matrix,
+    build_run_envelope,
+    grid_profiles,
+    qr_controls,
+)
+from superqr_desktop.v7_capacity_lab.protocol_bridge import load_phy_selection_manifest
 
 SIZE_PRESETS = [1000, 900, 800, 700, 600, 500, 400]
 
@@ -241,10 +250,13 @@ class MainWindow:
         )
         self._campaign_dwell_combo.pack(side="left", padx=8)
         self._campaign_dwell_combo.bind("<<ComboboxSelected>>", self._on_campaign_dwell_changed)
-        # run count
+        # test frame + run count
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill="x", pady=(8, 0))
-        ttk.Label(row, text="Runs:", style="Card.TLabel").pack(side="left")
+        self._btn_test_frame = ttk.Button(row, text="TEST FRAME",
+                                           command=self._on_test_frame)
+        self._btn_test_frame.pack(side="left")
+        ttk.Label(row, text="Runs:", style="Card.TLabel").pack(side="left", padx=(12, 0))
         self._lbl_run_count = ttk.Label(row, text=str(self.campaign_ctrl.run_count),
                                          style="Card.TLabel")
         self._lbl_run_count.pack(side="left", padx=8)
@@ -407,6 +419,60 @@ class MainWindow:
             symbols, self.display.marker_size, self.transfer_ctrl.profile,
         )
         self.diag.record_present(timing["render_ms"], timing["flip_ms"])
+
+    def _on_test_frame(self):
+        """Render one static test frame for the selected candidate profile."""
+        if not self._display_owned_by_main:
+            return
+        candidate = self._campaign_candidate_var.get()
+        marker = self.display.marker_size
+        screen = self.display.screen
+        if screen is None:
+            return
+
+        try:
+            renderer = LabRenderer(marker)
+            manifest = load_phy_selection_manifest()
+
+            if candidate in grid_profiles():
+                sequence = GridFrameSequence(candidate)
+                _frame_index, matrix = sequence.next_frame()
+                envelope = build_run_envelope(
+                    candidate, 0x0001, 0, 1,
+                    int(self._campaign_dwell_var.get()),
+                )
+                renderer.prepare_logical_frame(
+                    matrix,
+                    payload_bbox=manifest["payload_bbox"],
+                    sync_bits=envelope.bits(),
+                    sync_bboxes=(manifest["run_sync"]["top_bbox"],
+                                 manifest["run_sync"]["bottom_bbox"]),
+                    sync_rows=int(manifest["run_sync"]["rows"]),
+                    sync_cols=int(manifest["run_sync"]["cols"]),
+                )
+            elif candidate in qr_controls():
+                control = qr_controls()[candidate]
+                quiet = int(control["quiet_zone_modules"])
+                matrix = build_qr_matrix(
+                    control, 0, run_token=0x0001, frame_count=1,
+                    dwell_epochs=int(self._campaign_dwell_var.get()),
+                )
+                native = renderer.build_qr_native_surface(matrix, quiet)
+                renderer.prepare_qr_native_surface(native)
+            else:
+                return
+
+            surface = renderer.cached_frame_display
+            if surface is None:
+                return
+
+            cw, ch = screen.get_size()
+            screen.fill((8, 10, 14))
+            screen.blit(surface, ((cw - marker) // 2, (ch - marker) // 2))
+            pygame.display.flip()
+            self._lbl_err.config(text=f"Test frame: {candidate}")
+        except Exception as exc:
+            self._set_error(exc)
 
     def _start_transfer(self):
         if not self.transfer_ctrl.has_file:
