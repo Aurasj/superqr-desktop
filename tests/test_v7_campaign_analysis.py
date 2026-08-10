@@ -29,12 +29,20 @@ def test_campaign_analysis_reports_runs_and_current_acquisition_stage():
             "completed_ns": 4_000_000_000, "frame_index": 0, "scored": True,
             "observed_bits": 7200, "bit_errors": 10, "erased_bits": 20,
             "raw_valid": False, "inner_fec_valid": False, "innovative_bytes": 0,
+            "pipeline_ms": 8.0,
+        },
+        {
+            "run_id": "ABBB", "run_token": 0xABBB, "profile": "mono_96x75_medium",
+            "completed_ns": 4_100_000_000, "frame_index": 0, "scored": True,
+            "observed_bits": 7200, "bit_errors": 10, "erased_bits": 20,
+            "raw_valid": False, "inner_fec_valid": False, "innovative_bytes": 0,
             "pipeline_ms": 8.0, "acquisition_ms": 0.5,
         },
     ]
 
     summary = analyze_records(records)
     assert summary["unique_frame_indices"] == 3
+    assert summary["unreadable_frame_indices"] == 0
     assert len(summary["runs"]) == 2
     assert summary["runs"][0]["run_id"] == "ABBA"
     assert summary["runs"][0]["scored_frames"] == 2
