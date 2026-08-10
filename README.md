@@ -90,16 +90,44 @@ processes so a blocking display swap cannot freeze Start/Stop, progress, or
 window interaction. The sender display is released while the lab owns
 fullscreen output and restored after the lab closes.
 
+For a PC-camera campaign, select **Open PC camera receiver** in the PHY Lab.
+The receiver is a separate process, so camera decoding cannot disturb sender
+VSync. It provides:
+
+- the exact negotiated/analyzed camera frame with no hidden crop;
+- V7 carrier/finder, homography, optical-sync, run-token and frame-index state;
+- standard QR V27/V40 binary decoding with strict payload and CRC validation;
+- live capture/analysis FPS, BER, erasures, valid yield and pipeline timing;
+- receiver JSONL and diagnostic-frame export.
+
+Start the receiver camera first, keep the complete marker visible, then start
+the sender campaign. Grid and QR profiles now use the same selected outer
+marker size, so a fixed camera observes a consistent physical footprint. QR
+modules are always integer-scaled and centered; the sender export records the
+effective module scale and margins.
+
+The receiver can also be launched directly as `superqr-phy-camera`. CLI support
+for hardware automation remains available:
+
+```powershell
+superqr-phy-camera --probe
+superqr-phy-camera --headless --duration 20 --output pc-receiver.jsonl
+superqr-phy-lab --campaign all --frames 256 --marker-size 600 --fullscreen --output sender.json
+```
+
 For a native workstation runtime check (not headless CI), run:
 
 ```powershell
 python scripts/phy_lab_ui_runtime_smoke.py --full-app
 python scripts/phy_lab_ui_runtime_smoke.py --full-app --frames 256 --stop-after 5
+python scripts/phy_camera_ui_runtime_smoke.py
 ```
 
 The smoke test enters the real app/lab path, automatically completes or stops
 the optical run, and reports Tk heartbeat gaps, Stop-handler latency,
 presentation cadence, timing verification, and parent/child process IDs.
+The camera smoke requires a physical webcam and verifies asynchronous discovery,
+analyzed-frame delivery, responsive Stop, and clean capture shutdown.
 
 Profiles and deterministic vectors come from the canonical
 `superqr-protocol/test-vectors/v7-phy-selection/phase1_manifest.json`. Running

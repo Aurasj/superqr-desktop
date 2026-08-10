@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -240,6 +242,7 @@ class PhyLabWindow:
         analysis_tab.columnconfigure(0, weight=1)
         actions = ttk.Frame(analysis_tab)
         actions.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Button(actions, text="Open PC camera receiver", command=self.open_camera_receiver).pack(side="left")
         ttk.Button(actions, text="Analyze Android JSONL…", command=self.analyze).pack(side="left")
         ttk.Button(actions, text="Export sender metrics…", command=self.export).pack(side="left", padx=(8, 0))
         self.analysis_text = tk.Text(
@@ -375,6 +378,16 @@ class PhyLabWindow:
             self._set_analysis(format_analysis(analyze_jsonl(path)))
         except Exception as exc:
             messagebox.showerror("PHY Lab analysis", str(exc), parent=self.window)
+
+    def open_camera_receiver(self) -> None:
+        """Launch the receiver separately so camera work cannot disturb VSync."""
+        try:
+            subprocess.Popen([
+                sys.executable, "-m",
+                "superqr_desktop.v7_capacity_lab.camera_receiver_ui",
+            ])
+        except Exception as exc:
+            messagebox.showerror("PC Camera Receiver", str(exc), parent=self.window)
 
     def _set_analysis(self, text: str) -> None:
         self.analysis_text.configure(state="normal")

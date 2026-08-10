@@ -9,16 +9,22 @@ description = "SuperQR Desktop — screen-to-camera data transfer"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+    "numpy>=1.26",
+    "opencv-python>=4.10,<6",
+    "pillow>=10.0",
     "pygame-ce>=2.4.0",
     "segno>=1.6.6,<2",
+    "zxing-cpp>=3.0,<4",
 ]
 
 [project.scripts]
 superqr-desktop = "superqr_desktop.app:main"
 superqr-phy-lab = "superqr_desktop.v7_capacity_lab.phase1_runner:main"
+superqr-phy-camera = "superqr_desktop.v7_capacity_lab.camera_receiver_ui:main"
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.2",
     "pytest>=7.0.0",
 ]
 
