@@ -30,16 +30,17 @@ jobs:
         run: |
           python -m build
 
-      - name: Smoke test packaged wheel (V6 + V7)
+      - name: Smoke test packaged wheel (visual carrier + V7)
         run: |
           python -m venv fresh_env
           source fresh_env/bin/activate
           pip install dist/*.whl
           python -c "
-          # 1. V6 packaged contract
+          # 1. Packaged validated visual carrier contract
           from superqr_desktop.contract.loader import load_contract
           data, h = load_contract()
-          print(f'1. V6 contract: hash={h[:16]}... OK')
+          assert data['contract_version'] == 'v6'
+          print(f'1. Visual carrier contract: hash={h[:16]}... OK')
 
           # 2. V7 packaged reference data
           from superqr_desktop.v7_capacity_lab.protocol_bridge import load_reference_vectors
@@ -77,9 +78,11 @@ jobs:
           assert hashes['symbol_sha256'] == '06b045348c4193e1be03a704889200afdf17ef12d38804684e2387b2b306f518'
           print(f'6. Regenerated frame CRC32={hashes[\"symbol_crc32\"]} SHA256={hashes[\"symbol_sha256\"][:16]}... OK')
 
-          # 7. Import app
+          # 7. Import app and active V7 display path
           from superqr_desktop.app import main
-          print('7. superqr_desktop.app imported OK')
+          from superqr_desktop.presentation.display import DisplayController
+          from superqr_desktop.v7.renderer import V7TransferRenderer
+          print('7. Active V7 Desktop imports OK')
 
           # 8. Phase 1 PHY artifact is present in the installed wheel
           from superqr_desktop.v7_capacity_lab.protocol_bridge import load_phy_selection_manifest
