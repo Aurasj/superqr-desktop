@@ -49,6 +49,12 @@ def setup_styles(root: tk.Tk) -> ttk.Style:
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", "#245b8f")
     root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+    style.configure("TSpinbox", fieldbackground=PANEL2, background=PANEL2, foreground=TEXT,
+                    insertbackground=TEXT, selectbackground="#245b8f",
+                    selectforeground="#ffffff", bordercolor=BORDER)
+    style.map("TSpinbox",
+              fieldbackground=[("readonly", PANEL2)],
+              foreground=[("readonly", TEXT)])
     style.configure("TRadiobutton", background=PANEL, foreground=TEXT)
     style.configure("TCheckbutton", background=BG, foreground=TEXT)
     return style
