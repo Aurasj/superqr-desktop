@@ -75,6 +75,7 @@ class MainWindow:
         self._transfer_cadence_var = tk.StringVar(value="100 ms")
         self._transfer_file_label = tk.StringVar(value="No file selected")
         self._transfer_meta_label = tk.StringVar(value="")
+        self._transfer_speed_label = tk.StringVar(value="")
         self._transfer_progress_label = tk.StringVar(value="")
 
         # -- campaign vars --
@@ -206,6 +207,9 @@ class MainWindow:
         self._lbl_meta = ttk.Label(card, textvariable=self._transfer_meta_label,
                                     style="Muted.TLabel")
         self._lbl_meta.pack(anchor="w")
+        self._lbl_speed = ttk.Label(card, textvariable=self._transfer_speed_label,
+                                     style="Muted.TLabel")
+        self._lbl_speed.pack(anchor="w", pady=(2, 0))
         self._lbl_progress = ttk.Label(card, textvariable=self._transfer_progress_label,
                                         style="Muted.TLabel")
         self._lbl_progress.pack(anchor="w", pady=(2, 0))
@@ -657,6 +661,12 @@ class MainWindow:
             self._transfer_meta_label.set(
                 f"{ctrl.file_size:,} B  •  CRC32 {ctrl.file_crc32:08X}",
             )
+            rotation_s = ctrl.total_frames * ctrl.interval_ms / 1000.0
+            payload_kibs = p.payload_kib_s(ctrl.interval_ms)
+            self._transfer_speed_label.set(
+                f"Rotation {rotation_s:.1f}s ({ctrl.total_frames} frames × {ctrl.interval_ms}ms)  "
+                f"•  {payload_kibs:.1f} KiB/s payload",
+            )
             self._transfer_progress_label.set(
                 f"Session {ctrl.session_id}  •  "
                 f"frame {ctrl.current_frame_idx + 1}/{ctrl.total_frames}  •  {p.key}",
@@ -666,6 +676,7 @@ class MainWindow:
             self._transfer_meta_label.set(
                 f"AUTO receiver profile id {p.id}  •  {p.grid}×{p.grid}  •  {p.color_count} colors",
             )
+            self._transfer_speed_label.set("")
             self._transfer_progress_label.set("")
 
         # frame nav: only in IDLE with a file loaded and main owns display
