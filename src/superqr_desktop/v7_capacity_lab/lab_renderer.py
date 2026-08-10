@@ -258,26 +258,25 @@ class LabRenderer:
         return matches[0]
 
     def prepare_qr_native_surface(self, native: pygame.Surface) -> None:
-        """Render a QR control at its declared physical control size.
+        """Render a QR control in the same optical footprint as grid carriers.
 
-        QR controls are external baselines and intentionally do not inherit the
-        custom-grid marker size. V27-L is 6 px/module on a 900 px canvas and
-        V40-L is 4 px/module on a 900 px canvas, as declared by the canonical
-        Phase 1 manifest. Keeping integer module scaling avoids interpolation
-        and makes the physical comparison reproducible.
+        The selected marker size is the outer white canvas for every campaign
+        profile, so a fixed camera observes the same physical region throughout
+        a sequential run. QR modules retain an integer scale and are centered;
+        no interpolation or fractional module edge is introduced.
         """
         t_start = time.perf_counter_ns()
         total = native.get_width()
         if total != native.get_height():
             raise ValueError("native QR surface must be square")
-        control = self._qr_control_for_total_modules(total)
-        display_size = int(control["display_size_px"])
-        scale = int(control["integer_module_scale_px"])
+        self._qr_control_for_total_modules(total)
+        display_size = self.marker_size
+        scale = display_size // total
+        if scale < 1:
+            raise ValueError(
+                f"marker size {display_size} is too small for {total} QR modules"
+            )
         rendered = total * scale
-        if rendered != int(control["rendered_size_px"]):
-            raise ValueError("QR manifest rendered size does not match integer module scale")
-        if rendered > display_size:
-            raise ValueError("QR control does not fit its declared display canvas")
         scaled = pygame.transform.scale(native, (rendered, rendered))
         frame = pygame.Surface((display_size, display_size))
         frame.fill((255, 255, 255))
@@ -285,3 +284,20 @@ class LabRenderer:
         frame.blit(scaled, (offset, offset))
         self._cached_frame = frame
         self.timings.total_prepare_us = (time.perf_counter_ns() - t_start) // 1000
+
+    def qr_layout(self, total_modules: int) -> dict[str, int]:
+        """Describe the effective fixed-footprint QR presentation geometry."""
+        self._qr_control_for_total_modules(total_modules)
+        scale = self.marker_size // total_modules
+        if scale < 1:
+            raise ValueError(
+                f"marker size {self.marker_size} is too small for {total_modules} QR modules"
+            )
+        rendered = total_modules * scale
+        return {
+            "canvas_size_px": self.marker_size,
+            "total_modules": total_modules,
+            "integer_module_scale_px": scale,
+            "rendered_size_px": rendered,
+            "margin_px": (self.marker_size - rendered) // 2,
+        }

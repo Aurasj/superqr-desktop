@@ -387,6 +387,10 @@ class Phase1CampaignPresenter:
         self._current_result_recorded = True
 
     def export_payload(self) -> dict:
+        qr_layouts = {}
+        renderer = self.renderer or LabRenderer(self.marker_size)
+        for name, control in qr_controls().items():
+            qr_layouts[name] = renderer.qr_layout(int(control["total_modules"]))
         return {
             "schema": "superqr-phy-lab-sender-v3",
             "production_wire_frozen": False,
@@ -396,6 +400,7 @@ class Phase1CampaignPresenter:
                 "marker_size_px": self.marker_size,
                 "ready_seconds": self.ready_seconds,
                 "done_seconds": self.done_seconds,
+                "qr_layouts": qr_layouts,
             },
             "state": self.state.value,
             "runs_completed": len(self.run_results),

@@ -77,7 +77,12 @@ def analyze_records(records: list[dict]) -> dict:
     errors = sum(int(record.get("bit_errors", 0)) for record in scored)
     non_erased = observed - erased
     indices = [record.get("frame_index") for record in scored]
-    valid_indices = [int(index) for index in indices if isinstance(index, (int, float)) and 0 <= index <= 255]
+    valid_frame_keys = {
+        (str(record.get("run_id", "unknown")), str(record.get("profile", "UNKNOWN")), int(record["frame_index"]))
+        for record in scored
+        if isinstance(record.get("frame_index"), (int, float)) and 0 <= record["frame_index"] <= 255
+    }
+    valid_indices = [key[2] for key in valid_frame_keys]
     failures = Counter(
         str(record["failure_reason"])
         for record in records if record.get("failure_reason")
@@ -131,7 +136,7 @@ def analyze_records(records: list[dict]) -> dict:
         "observations": len(records),
         "scored_frames": len(scored),
         "rejected_frames": len(records) - len(scored),
-        "unique_frame_indices": len(set(valid_indices)),
+        "unique_frame_indices": len(valid_frame_keys),
         "unreadable_frame_indices": len(indices) - len(valid_indices),
         "initial_frame_zero_observations": prefix_zero,
         "ber_non_erased": errors / non_erased if non_erased else 0.0,

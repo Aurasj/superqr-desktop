@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import time
 
 import pygame
@@ -35,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--done-seconds", type=float, default=2.0)
     parser.add_argument("--run-token", type=lambda value: int(value, 0))
     parser.add_argument("--json-status", action="store_true")
+    parser.add_argument("--output", help="write final sender metrics JSON")
     return parser
 
 
@@ -98,6 +100,11 @@ class Phase1Runner:
             if presenter.state == CampaignState.ERROR:
                 raise RuntimeError(presenter.error or "presentation failed")
         finally:
+            if self.args.output:
+                Path(self.args.output).write_text(
+                    json.dumps(presenter.export_payload(), indent=2, default=str) + "\n",
+                    encoding="utf-8",
+                )
             presenter.stop()
 
 

@@ -292,13 +292,18 @@ def test_presentation_worker_completes_without_tk_scheduler_and_exports_each_run
         payload = worker.export_payload()
         assert payload["schema"] == "superqr-phy-lab-sender-v3"
         assert payload["production_wire_frozen"] is False
-        assert payload["presentation"] == {
+        assert {
+            key: payload["presentation"][key]
+            for key in ("display_index", "fullscreen", "marker_size_px", "ready_seconds", "done_seconds")
+        } == {
             "display_index": 0,
             "fullscreen": False,
             "marker_size_px": 400,
             "ready_seconds": 0.3,
             "done_seconds": 0.0,
         }
+        assert payload["presentation"]["qr_layouts"]["qr_v27_l_safe"]["canvas_size_px"] == 400
+        assert payload["presentation"]["qr_layouts"]["qr_v40_l_ceiling"]["canvas_size_px"] == 400
         assert payload["runtime_isolation"] == "process"
         assert payload["presenter_process_id"] != os.getpid()
         assert payload["runs_completed"] == 1

@@ -34,6 +34,7 @@ def test_campaign_analysis_reports_runs_and_current_acquisition_stage():
     ]
 
     summary = analyze_records(records)
+    assert summary["unique_frame_indices"] == 3
     assert len(summary["runs"]) == 2
     assert summary["runs"][0]["run_id"] == "ABBA"
     assert summary["runs"][0]["scored_frames"] == 2
