@@ -596,16 +596,20 @@ class MainWindow:
                         f"•  {snap.profile_key}",
                     )
 
-            # pygame events (only when main process owns SDL)
+            # SDL events: only drain a few per tick so the OS message pump
+            # has room to service Tk window move / resize events.
             if self._display_owned_by_main:
-                for event in pygame.event.get():
+                for _ in range(4):
+                    event = pygame.event.poll()
+                    if event.type == pygame.NOEVENT:
+                        break
                     if event.type == pygame.QUIT or (
                         event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
                     ):
                         self.close()
                         return
 
-            self.root.after(2, self._tick)
+            self.root.after(50, self._tick)
         except tk.TclError:
             return
 
