@@ -1,8 +1,8 @@
 # SuperQR Desktop
 
-SuperQR Desktop is the sender for offline screen-to-camera file transfer.
+SuperQR Desktop is the V7 sender and Phase 1 physical-PHY test application for offline screen-to-camera transfer.
 
-The product UI is **V7 only**. The physically validated V6 visual carrier remains packaged as the acquisition/debug foundation, but there is no separate V6/V7 application mode.
+The active Desktop runtime is **V7 only**. The packaged `visual_contract.json` still carries the validated V6-era carrier geometry (border, anchors, pilots and tracking layout), because V7 intentionally reuses that proven optical geometry. The old V6 sender, transport, renderer and display implementation are no longer part of the active Desktop runtime.
 
 ## Fresh clone — Windows
 
@@ -11,111 +11,81 @@ Recommended prerequisite: **Python 3.11** and Git for Windows.
 ```powershell
 git clone https://github.com/Aurasj/superqr-desktop.git
 cd superqr-desktop
-```
-
-Create a **new virtual environment** for this checkout:
-
-```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-```
-
-Verify the fresh clone:
-
-```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Run SuperQR Desktop without activating the environment:
+Run without activating the environment:
 
 ```powershell
 .\.venv\Scripts\superqr-desktop.exe
 ```
 
-Or activate it first:
+or activate first:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 superqr-desktop
 ```
 
-If PowerShell blocks activation, activation is optional; use the direct `.venv\Scripts\...` commands above.
+Do not copy an old `.venv`; recreate it for a fresh checkout.
 
-**Do not copy an old `.venv`.** It is local/generated state, is ignored by Git, and should be recreated after a fresh clone.
+## Current application
 
-This repository is self-contained for normal run/test/package workflows. It includes the packaged V6 contract and V7 Capacity Lab reference data; a sibling `superqr-protocol` checkout is optional for development cross-validation only.
+The main window has two modes.
 
-## Current V7 baseline
+### TRANSFER
 
-- adaptive optical profiles (40/48/56/64+ grids, 4- and experimental 8-color palettes);
-- current reliable measurement default: **40×40 / 4 colors / 100 ms**;
-- V6-proven outer carrier, anchors, pilots and geometry;
-- profile ID announced optically so Android AUTO can follow the sender;
-- streaming file slicing instead of precomputing the full optical carousel;
-- CRC32-protected current pre-FEC transport;
-- V7.0 sender presentation telemetry with measured cadence and JSON export.
+This is the V7 file sender.
 
-Higher-density and 8-color profiles are experiments, not universal speed claims.
+1. Select the output monitor, marker size and window/fullscreen mode.
+2. Select a V7 optical profile and frame interval.
+3. Select a file. This **prepares** the carousel and previews frame 0; it does not claim that transfer is already running.
+4. Press **START** to begin optical presentation.
+5. Press **STOP** to stop while keeping the prepared file available for restart or manual Prev/Next inspection.
 
-## Run
+Active transfer presentation stays in the main process and uses the same SDL display and V7 renderer as the preview path. Frame cadence has its own monotonic deadline scheduler and is not driven by the slower Tk status-poll loop, so the 25/33/42 ms test presets are not artificially limited to 20 fps.
 
-With the virtual environment active:
+The transfer panel separates configured/theoretical rate from measured presentation cadence. Runtime status reports actual completed presents, measured presentation FPS and late presents.
 
-```powershell
-superqr-desktop
-```
+The current conservative physical baseline remains the 40×40 / 4-color profile at 100 ms. Faster and denser profiles are measurement candidates, not guaranteed goodput claims.
 
-or:
+### PHASE 1 TEST
 
-```powershell
-python -m superqr_desktop.app
-```
+This is the physical PHY campaign sender used while selecting the V7 optical layer.
 
-Selecting a file starts the current transfer carousel immediately. `START / RESTART` restarts it explicitly.
+It supports the canonical grid candidates and QR controls, including the `TEST FRAME` path for quickly checking acquisition on a phone before starting a full campaign.
 
-## V7 Phase 1 PHY laboratory
+Campaign presentation uses a separate process so Tk UI work cannot disturb the measurement presenter. The main SDL display is released before the campaign owns it and reclaimed after campaign completion or stop.
 
-The laboratory transmitter is separate from the production V7 sender:
+The Phase 1 implementation remains under `v7_capacity_lab` for now because it is active measurement code, not dead legacy. It should only be renamed/reorganized after the physical campaign path is frozen.
+
+## PC camera receiver
+
+The Phase 1 camera receiver can be launched directly:
 
 ```powershell
-superqr-phy-lab --list
-superqr-phy-lab --profile mono_64x50_matched --dwell 3 --frames 256
-superqr-phy-lab --profile qr_v27_l_safe --frames 256
+superqr-phy-camera
 ```
 
-Normal physical campaigns are launched from **OPEN V7 PHYSICAL PHY LAB** in
-the Desktop app. The Tk controls and the SDL optical presenter run in separate
-processes so a blocking display swap cannot freeze Start/Stop, progress, or
-window interaction. The sender display is released while the lab owns
-fullscreen output and restored after the lab closes.
-
-For a PC-camera campaign, select **Open PC camera receiver** in the PHY Lab.
-The receiver is a separate process, so camera decoding cannot disturb sender
-VSync. It provides:
-
-- the exact negotiated/analyzed camera frame with no hidden crop;
-- V7 carrier/finder, homography, optical-sync, run-token and frame-index state;
-- standard QR V27/V40 binary decoding with strict payload and CRC validation;
-- live capture/analysis FPS, BER, erasures, valid yield and pipeline timing;
-- receiver JSONL and diagnostic-frame export.
-
-Start the receiver camera first, keep the complete marker visible, then start
-the sender campaign. Grid and QR profiles now use the same selected outer
-marker size, so a fixed camera observes a consistent physical footprint. QR
-modules are always integer-scaled and centered; the sender export records the
-effective module scale and margins.
-
-The receiver can also be launched directly as `superqr-phy-camera`. CLI support
-for hardware automation remains available:
+Useful CLI paths remain available:
 
 ```powershell
 superqr-phy-camera --probe
 superqr-phy-camera --headless --duration 20 --output pc-receiver.jsonl
+superqr-phy-lab --list
+superqr-phy-lab --profile mono_64x50_matched --dwell 3 --frames 256
+superqr-phy-lab --profile qr_v27_l_safe --frames 256
 superqr-phy-lab --campaign all --frames 256 --marker-size 600 --fullscreen --output sender.json
 ```
 
-For a native workstation runtime check (not headless CI), run:
+The receiver exposes the analyzed camera frame, acquisition/homography state, QR/run-sync state and receiver-side performance/error measurements. It can also export receiver JSONL/diagnostic evidence for replay.
+
+## Runtime smoke tests
+
+For workstation checks that require a real GUI/display:
 
 ```powershell
 python scripts/phy_lab_ui_runtime_smoke.py --full-app
@@ -123,35 +93,32 @@ python scripts/phy_lab_ui_runtime_smoke.py --full-app --frames 256 --stop-after 
 python scripts/phy_camera_ui_runtime_smoke.py
 ```
 
-The smoke test enters the real app/lab path, automatically completes or stops
-the optical run, and reports Tk heartbeat gaps, Stop-handler latency,
-presentation cadence, timing verification, and parent/child process IDs.
-The camera smoke requires a physical webcam and verifies asynchronous discovery,
-analyzed-frame delivery, responsive Stop, and clean capture shutdown.
+The camera smoke requires a physical webcam.
 
-Profiles and deterministic vectors come from the canonical
-`superqr-protocol/test-vectors/v7-phy-selection/phase1_manifest.json`. Running
-the lab does not select or change the production V7 wire format.
+## Architecture
 
-## Measurement terminology
+```text
+src/superqr_desktop/
+  app.py
+  ui/                 main Tk shell
+  transfer/           V7 transfer controller + cadence scheduling
+  presentation/       version-neutral SDL display + V7 frame presenter
+  diagnostics/        measured sender presentation telemetry
+  campaign/           Phase 1 campaign controller
+  contract/           packaged optical/modem contracts and vectors
+  v7/                 production V7 sender/renderer/transport + dormant Phase 2 modem
+  v7_capacity_lab/    active Phase 1 PHY/camera/replay laboratory
+```
 
-The LIVE panel deliberately separates:
+Phase 2 modem code remains present but is not being extended as part of the current Phase 1 cleanup.
 
-- configured/nominal logical FPS;
-- measured presentation-completion FPS;
-- theoretical raw/payload ceilings.
+## Contract and reference data
 
-Theoretical rate is **not** actual file goodput. Receiver-side camera FPS, analysis FPS, useful decoded FPS and completed-file goodput are separate measurements defined by the protocol V7.0 measurement contract.
+The repository is self-contained for normal run/test/package workflows. A sibling `superqr-protocol` checkout is optional for development cross-validation.
 
-Use **Export metrics JSON** to save the Desktop side of a benchmark run.
+`contract/visual_contract.json` intentionally retains `contract_version: "v6"`: it is the validated optical carrier geometry reused by V7, not evidence that the Desktop application still has a V6 product mode.
 
-## Advanced carrier debug
-
-The Advanced section renders V6 carrier diagnostic patterns only. It is not a second protocol/product mode.
-
-## V6 status
-
-V6 remains frozen in protocol history as the validated compatibility/reference release. New transport, FEC, timing, compression and adaptive-PHY work belongs to V7 and later.
+Phase 1 profiles and deterministic vectors are packaged from the canonical protocol artifacts. Running the laboratory does not change the production wire format.
 
 ## Tests
 
@@ -159,4 +126,4 @@ V6 remains frozen in protocol history as the validated compatibility/reference r
 python -m pytest
 ```
 
-CI checks out this repository from scratch, installs it, runs the test suite, builds wheel/sdist, creates a fresh virtual environment, installs the packaged wheel and verifies packaged V6/V7 resources without a sibling `superqr-protocol` checkout.
+CI runs the tests, builds wheel/sdist, installs the wheel into a fresh virtual environment, then checks the packaged visual carrier contract, V7 reference data, deterministic vectors, application import and Phase 1 artifact availability.
