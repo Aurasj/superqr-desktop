@@ -9,7 +9,7 @@ the eventual production V7 data PHY or wire format.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pygame
 
@@ -226,7 +226,7 @@ class LabRenderer:
                              pygame.Rect(x1, y1, max(1, x2 - x1), max(1, y2 - y1)))
 
     def prepare_qr_matrix(self, matrix: tuple[bytes, ...], quiet_zone: int = 4) -> None:
-        """Prepare a standard QR control with exact integer module scaling."""
+        """Prepare a canonical standard-QR control surface."""
         native = self.build_qr_native_surface(matrix, quiet_zone)
         self.prepare_qr_native_surface(native)
 
@@ -248,20 +248,40 @@ class LabRenderer:
                     buf[offset:offset + 3] = b"\x00\x00\x00"
         return pygame.image.frombytes(bytes(buf), (total, total), "RGB")
 
+    def _qr_control_for_total_modules(self, total_modules: int) -> dict:
+        matches = [
+            control for control in load_phy_selection_manifest()["qr_controls"]
+            if int(control["total_modules"]) == total_modules
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"no unique canonical QR control for {total_modules} total modules")
+        return matches[0]
+
     def prepare_qr_native_surface(self, native: pygame.Surface) -> None:
-        """Scale and center an already-encoded compact QR surface."""
+        """Render a QR control at its declared physical control size.
+
+        QR controls are external baselines and intentionally do not inherit the
+        custom-grid marker size. V27-L is 6 px/module on a 900 px canvas and
+        V40-L is 4 px/module on a 900 px canvas, as declared by the canonical
+        Phase 1 manifest. Keeping integer module scaling avoids interpolation
+        and makes the physical comparison reproducible.
+        """
         t_start = time.perf_counter_ns()
         total = native.get_width()
         if total != native.get_height():
             raise ValueError("native QR surface must be square")
-        scale = self.marker_size // total
-        if scale < 1:
-            raise ValueError("marker is too small for the QR matrix")
+        control = self._qr_control_for_total_modules(total)
+        display_size = int(control["display_size_px"])
+        scale = int(control["integer_module_scale_px"])
         rendered = total * scale
+        if rendered != int(control["rendered_size_px"]):
+            raise ValueError("QR manifest rendered size does not match integer module scale")
+        if rendered > display_size:
+            raise ValueError("QR control does not fit its declared display canvas")
         scaled = pygame.transform.scale(native, (rendered, rendered))
-        frame = pygame.Surface((self.marker_size, self.marker_size))
+        frame = pygame.Surface((display_size, display_size))
         frame.fill((255, 255, 255))
-        offset = (self.marker_size - rendered) // 2
+        offset = (display_size - rendered) // 2
         frame.blit(scaled, (offset, offset))
         self._cached_frame = frame
         self.timings.total_prepare_us = (time.perf_counter_ns() - t_start) // 1000
