@@ -17,6 +17,7 @@ from superqr_desktop.diagnostics.collector import DiagnosticsCollector
 from superqr_desktop.presentation.display import DisplayController
 from superqr_desktop.presentation.transfer import TransferPresenter
 from superqr_desktop.transfer.controller import TransferController, TransferLifecycle
+from superqr_desktop.transfer.timing import TransferCadenceClock
 from superqr_desktop.ui import styles
 from superqr_desktop.v7.profiles import BY_LABEL, PROFILES
 from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
@@ -33,11 +34,11 @@ SIZE_PRESETS = [1000, 900, 800, 700, 600, 500, 400]
 
 
 class MainWindow:
-    """Single clean SuperQR V7 desktop control application.
+    """Single SuperQR V7 desktop control application.
 
     Two modes:
-      TRANSFER    — file transfer via optical profile (child-process SDL)
-      PHASE 1 TEST — physical PHY campaign testing (child-process SDL)
+      TRANSFER     — file transfer on the main-process SDL display
+      PHASE 1 TEST — physical PHY campaign testing in an isolated SDL process
     """
 
     def __init__(self, contract: dict, contract_hash: str):
@@ -59,11 +60,12 @@ class MainWindow:
         self.transfer_ctrl = TransferController()
         self.campaign_ctrl = CampaignController()
         self.transfer_presenter = TransferPresenter(self.display)
+        self.transfer_clock = TransferCadenceClock()
         self.diag = DiagnosticsCollector()
 
         # -- UI state --
         self._mode = tk.StringVar(value="TRANSFER")
-        self._last_transfer_tick = 0.0
+        self._transfer_after_id: str | None = None
 
         # -- display vars --
         labels = [d["label"] for d in self.detected_displays]
@@ -325,6 +327,7 @@ class MainWindow:
         if self.campaign_ctrl.lifecycle not in (CampaignLifecycle.IDLE, CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED):
             self.campaign_ctrl.request_stop()
         self._drain_campaign_completion()
+        self._cancel_transfer_tick()
         self.transfer_ctrl.stop_presenting()
 
     # ------------------------------------------------------------------
@@ -341,20 +344,36 @@ class MainWindow:
         profile = BY_LABEL.get(self._transfer_profile_var.get())
         if profile is None:
             return
+        if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
+            self._cancel_transfer_tick()
+            self.transfer_ctrl.stop_presenting()
         self.transfer_ctrl.set_profile(profile)
         self.transfer_presenter.invalidate_renderer()
+        if self.transfer_ctrl.has_file:
+            self._render_transfer_frame()
         self._update_transfer_ui()
 
     def _on_transfer_cadence_changed(self, _event=None):
         try:
             ms = int(self._transfer_cadence_var.get().replace(" ms", ""))
             self.transfer_ctrl.set_interval(ms)
+            if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
+                self.transfer_clock.reschedule(time.monotonic(), ms)
+                self._schedule_transfer_tick(replace=True)
             self._update_transfer_ui()
         except ValueError:
             pass
 
     def _apply_display(self):
         try:
+            if self.campaign_ctrl.lifecycle not in (
+                CampaignLifecycle.IDLE, CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED,
+            ):
+                return
+            if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
+                self._cancel_transfer_tick()
+                self.transfer_ctrl.stop_presenting()
+
             idx = self._selected_display_index()
             marker = self._selected_size_var.get()
             fullscreen = self._window_mode_var.get() == "fullscreen"
@@ -368,6 +387,7 @@ class MainWindow:
                      f"•  active {metrics.active_width}×{metrics.active_height}",
             )
             self.display.render_standby()
+            self._update_transfer_ui()
             self._update_status()
         except Exception as exc:
             self._set_error(exc)
@@ -380,10 +400,11 @@ class MainWindow:
 
     def _on_stop(self):
         if self._mode.get() == "TRANSFER":
+            self._cancel_transfer_tick()
             self.transfer_ctrl.stop_presenting()
             self._update_transfer_ui()
         else:
-            if self.campaign_ctrl.lifecycle == CampaignLifecycle.RUNNING:
+            if self.campaign_ctrl.lifecycle in (CampaignLifecycle.STARTING, CampaignLifecycle.RUNNING):
                 self.campaign_ctrl.request_stop()
 
     def _on_select_file(self):
@@ -391,7 +412,11 @@ class MainWindow:
         if not path:
             return
         try:
+            if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
+                self._cancel_transfer_tick()
+                self.transfer_ctrl.stop_presenting()
             self.transfer_ctrl.select_file(path)
+            self.diag.reset()
             self._render_transfer_frame()
             self._update_transfer_ui()
         except Exception as exc:
@@ -412,17 +437,19 @@ class MainWindow:
         self._update_transfer_ui()
 
     def _render_transfer_frame(self):
-        """Render one transfer frame on the existing SDL display. Used for both
-        manual navigation and in-process transfer sending."""
-        if not self.transfer_ctrl.has_file:
-            return
-        if self.display.screen is None:
+        """Render one transfer frame on the existing SDL display."""
+        if not self.transfer_ctrl.has_file or self.display.screen is None:
             return
         symbols = self.transfer_ctrl.get_frame_symbols()
         timing = self.transfer_presenter.render_frame(
             symbols, self.display.marker_size, self.transfer_ctrl.profile,
         )
-        self.diag.record_present(timing["render_ms"], timing["flip_ms"])
+        self.diag.record_present(
+            self.transfer_ctrl.current_frame_idx,
+            self.transfer_ctrl.interval_ms,
+            timing["render_ms"],
+            timing["flip_ms"],
+        )
 
     def _on_test_frame(self):
         """Render one static test frame for the selected candidate profile."""
@@ -487,8 +514,64 @@ class MainWindow:
         if not ok:
             messagebox.showwarning("SuperQR V7", "Could not start transfer.")
             return
-        self._last_transfer_tick = time.monotonic()
+
+        try:
+            self.diag.reset()
+            # Frame 0 is physically presented immediately; the cadence clock then
+            # schedules frame 1 rather than making START wait one whole interval.
+            self._render_transfer_frame()
+            self.transfer_clock.start(time.monotonic(), self.transfer_ctrl.interval_ms)
+            self._schedule_transfer_tick()
+        except Exception as exc:
+            self._cancel_transfer_tick()
+            self.transfer_ctrl.stop_presenting()
+            self._set_error(exc)
+        self._update_transfer_ui()
         self._update_status()
+
+    def _schedule_transfer_tick(self, *, replace: bool = False):
+        if replace and self._transfer_after_id is not None:
+            try:
+                self.root.after_cancel(self._transfer_after_id)
+            except tk.TclError:
+                pass
+            self._transfer_after_id = None
+        if self.transfer_ctrl.lifecycle != TransferLifecycle.PRESENTING or not self.transfer_clock.running:
+            return
+        if self._transfer_after_id is not None:
+            return
+        delay_ms = self.transfer_clock.delay_ms(time.monotonic())
+        self._transfer_after_id = self.root.after(delay_ms, self._on_transfer_tick)
+
+    def _cancel_transfer_tick(self):
+        after_id = self._transfer_after_id
+        self._transfer_after_id = None
+        self.transfer_clock.stop()
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+
+    def _on_transfer_tick(self):
+        self._transfer_after_id = None
+        if self.transfer_ctrl.lifecycle != TransferLifecycle.PRESENTING or not self.transfer_clock.running:
+            return
+        now = time.monotonic()
+        if not self.transfer_clock.due(now):
+            self._schedule_transfer_tick()
+            return
+        try:
+            self.transfer_ctrl.advance_frame()
+            self._render_transfer_frame()
+            self.transfer_clock.mark_presented(time.monotonic(), self.transfer_ctrl.interval_ms)
+        except Exception as exc:
+            self._cancel_transfer_tick()
+            self.transfer_ctrl.stop_presenting()
+            self._set_error(exc)
+            self._update_transfer_ui()
+            return
+        self._schedule_transfer_tick()
 
     def _start_campaign(self):
         if self.campaign_ctrl.lifecycle != CampaignLifecycle.IDLE:
@@ -533,7 +616,7 @@ class MainWindow:
             pass
 
     # ------------------------------------------------------------------
-    # Tick loop
+    # UI/status polling loop (presentation cadence is scheduled separately)
     # ------------------------------------------------------------------
 
     def _tick(self):
@@ -549,18 +632,6 @@ class MainWindow:
                 self._update_campaign_ui()
                 self._update_status()
 
-            # in-process transfer frame driving
-            if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
-                now = time.monotonic()
-                if now - self._last_transfer_tick >= self.transfer_ctrl.interval_ms / 1000.0:
-                    self._last_transfer_tick = now
-                    self.transfer_ctrl.advance_frame()
-                    try:
-                        self._render_transfer_frame()
-                    except Exception as exc:
-                        self.transfer_ctrl.stop_presenting()
-                        self._set_error(exc)
-
             # campaign progress
             if self.campaign_ctrl.lifecycle in (CampaignLifecycle.STARTING, CampaignLifecycle.RUNNING):
                 snap = self.campaign_ctrl.snapshot()
@@ -575,13 +646,16 @@ class MainWindow:
                         self._lbl_err.config(text=f"Error: {snap.error}")
                     self._update_status()
 
-            # transfer progress (in-process)
+            # transfer progress; cadence itself is NOT driven by this 20 Hz loop.
             if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
+                diag = self.diag.snapshot()
+                measured_fps = float(diag["present_measured_fps"])
                 self._transfer_progress_label.set(
                     f"Session {self.transfer_ctrl.session_id}  •  "
                     f"frame {self.transfer_ctrl.current_frame_idx + 1}/{self.transfer_ctrl.total_frames}  "
-                    f"•  {self.diag.snapshot()['present_count']} presents  "
-                    f"•  {self.transfer_ctrl.profile.key}",
+                    f"•  {diag['present_count']} presents  "
+                    f"•  {measured_fps:.1f} fps measured  "
+                    f"•  late {diag['late_present_count']}",
                 )
 
             # SDL events (only when main process owns the display)
@@ -634,12 +708,13 @@ class MainWindow:
             payload_kibs = p.payload_kib_s(ctrl.interval_ms)
             self._transfer_speed_label.set(
                 f"Rotation {rotation_s:.1f}s ({ctrl.total_frames} frames × {ctrl.interval_ms}ms)  "
-                f"•  {payload_kibs:.1f} KiB/s payload",
+                f"•  {payload_kibs:.1f} KiB/s theoretical payload",
             )
-            self._transfer_progress_label.set(
-                f"Session {ctrl.session_id}  •  "
-                f"frame {ctrl.current_frame_idx + 1}/{ctrl.total_frames}  •  {p.key}",
-            )
+            if ctrl.lifecycle != TransferLifecycle.PRESENTING:
+                self._transfer_progress_label.set(
+                    f"Session {ctrl.session_id}  •  "
+                    f"frame {ctrl.current_frame_idx + 1}/{ctrl.total_frames}  •  {p.key}",
+                )
         else:
             self._transfer_file_label.set("No file selected")
             self._transfer_meta_label.set(
@@ -710,6 +785,7 @@ class MainWindow:
         self.root.mainloop()
 
     def close(self):
+        self._cancel_transfer_tick()
         self.transfer_ctrl.stop_presenting()
         self.campaign_ctrl.request_stop()
         self._drain_campaign_completion()
