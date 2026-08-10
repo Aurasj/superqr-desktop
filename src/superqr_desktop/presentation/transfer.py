@@ -1,4 +1,4 @@
-"""Synchronous in-process V7 transfer frame rendering for manual navigation."""
+"""Synchronous in-process V7 transfer frame rendering."""
 
 from __future__ import annotations
 
@@ -12,10 +12,11 @@ from superqr_desktop.v7.renderer import V7TransferRenderer
 
 
 class TransferPresenter:
-    """Renders V7 transfer frames to the main-process SDL display.
+    """Render V7 transfer frames on the main-process SDL display.
 
-    Used only for manual Prev/Next frame navigation. Active transfer
-    presentation runs in a child process via TransferPresentationWorker.
+    The same renderer/display path is used for manual Prev/Next inspection and
+    active transfer presentation, so what the user previews is the optical path
+    that START actually sends.
     """
 
     def __init__(self, display: DisplayController):
