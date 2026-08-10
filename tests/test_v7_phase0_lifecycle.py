@@ -20,23 +20,21 @@ from superqr_desktop.transfer.controller import (
 
 
 # ---------------------------------------------------------------------------
-# TRANSFER controller lifecycle
-# ---------------------------------------------------------------------------
+# TRANSFER controller lifecycle (in-process)
 
 class TestTransferLifecycle:
     def test_initial_state_is_idle(self):
         ctrl = TransferController()
         assert ctrl.lifecycle == TransferLifecycle.IDLE
-        assert not ctrl.needs_display_reclaim
         assert ctrl.has_file is False
 
     def test_start_presenting_without_file_returns_false(self):
         ctrl = TransferController()
-        ok = ctrl.start_presenting(display_index=0, fullscreen=False, marker_size=600)
+        ok = ctrl.start_presenting()
         assert ok is False
         assert ctrl.lifecycle == TransferLifecycle.IDLE
 
-    def test_presenting_transitions_through_stop_to_reclaim(self, tmp_path):
+    def test_start_presenting_transitions_to_presenting(self, tmp_path):
         ctrl = TransferController()
         path = tmp_path / "test.bin"
         path.write_bytes(b"x" * 5000)
@@ -45,86 +43,46 @@ class TestTransferLifecycle:
         assert ctrl.has_file
         assert ctrl.lifecycle == TransferLifecycle.IDLE
 
-        ok = ctrl.start_presenting(display_index=0, fullscreen=False, marker_size=400)
+        ok = ctrl.start_presenting()
         assert ok is True
         assert ctrl.lifecycle == TransferLifecycle.PRESENTING
 
-        # request stop
-        ctrl.request_stop()
-        assert ctrl.lifecycle == TransferLifecycle.STOPPING
-
-        # poll until completion or timeout
-        for _ in range(100):
-            ctrl.poll()
-            if ctrl.lifecycle in (TransferLifecycle.COMPLETED, TransferLifecycle.FAILED):
-                break
-            time.sleep(0.05)
-        assert ctrl.lifecycle in (TransferLifecycle.COMPLETED, TransferLifecycle.FAILED)
-
-    def test_request_stop_from_presenting_enters_stopping(self, tmp_path):
+    def test_stop_transitions_back_to_idle(self, tmp_path):
         ctrl = TransferController()
         path = tmp_path / "test.bin"
         path.write_bytes(b"x" * 5000)
         ctrl.select_file(str(path))
-        ctrl.start_presenting(display_index=0, fullscreen=False, marker_size=400)
+        ctrl.start_presenting()
+        assert ctrl.lifecycle == TransferLifecycle.PRESENTING
 
-        ctrl.request_stop()
-        assert ctrl.lifecycle == TransferLifecycle.STOPPING
-
-        for _ in range(100):
-            ctrl.poll()
-            if ctrl.lifecycle in (TransferLifecycle.COMPLETED, TransferLifecycle.FAILED):
-                break
-            time.sleep(0.05)
-
-        if ctrl.needs_display_reclaim:
-            ctrl.reclaim_display()
+        ctrl.stop_presenting()
         assert ctrl.lifecycle == TransferLifecycle.IDLE
 
-    def test_reclaim_display_is_idempotent(self, tmp_path):
+    def test_stop_preserves_loaded_file(self, tmp_path):
         ctrl = TransferController()
         path = tmp_path / "test.bin"
         path.write_bytes(b"x" * 5000)
         ctrl.select_file(str(path))
-        ctrl.start_presenting(display_index=0, fullscreen=False, marker_size=400)
-        ctrl.request_stop()
-
-        for _ in range(100):
-            ctrl.poll()
-            if ctrl.lifecycle in (TransferLifecycle.COMPLETED, TransferLifecycle.FAILED):
-                break
-            time.sleep(0.05)
-
-        if ctrl.needs_display_reclaim:
-            snap = ctrl.reclaim_display()
-            assert snap is not None
-            assert ctrl.lifecycle == TransferLifecycle.IDLE
-            assert not ctrl.needs_display_reclaim
-
-            # second reclaim does nothing
-            snap2 = ctrl.reclaim_display()
-            assert snap2 is None
-            assert ctrl.lifecycle == TransferLifecycle.IDLE
-
-    def test_has_file_preserved_after_reclaim(self, tmp_path):
-        ctrl = TransferController()
-        path = tmp_path / "test.bin"
-        path.write_bytes(b"x" * 5000)
-        ctrl.select_file(str(path))
-        ctrl.start_presenting(display_index=0, fullscreen=False, marker_size=400)
-        ctrl.request_stop()
-
-        for _ in range(100):
-            ctrl.poll()
-            if ctrl.lifecycle in (TransferLifecycle.COMPLETED, TransferLifecycle.FAILED):
-                break
-            time.sleep(0.05)
-
-        if ctrl.needs_display_reclaim:
-            ctrl.reclaim_display()
+        ctrl.start_presenting()
+        ctrl.stop_presenting()
 
         assert ctrl.has_file
         assert ctrl.total_frames > 0
+
+    def test_double_start_is_rejected(self, tmp_path):
+        ctrl = TransferController()
+        path = tmp_path / "test.bin"
+        path.write_bytes(b"x" * 5000)
+        ctrl.select_file(str(path))
+        ctrl.start_presenting()
+        assert not ctrl.start_presenting()
+        ctrl.stop_presenting()
+
+    def test_stop_presenting_is_idempotent(self, tmp_path):
+        ctrl = TransferController()
+        assert ctrl.lifecycle == TransferLifecycle.IDLE
+        ctrl.stop_presenting()  # no-op in IDLE
+        assert ctrl.lifecycle == TransferLifecycle.IDLE
 
 
 # ---------------------------------------------------------------------------
@@ -259,24 +217,16 @@ class TestCampaignLifecycle:
 # ---------------------------------------------------------------------------
 
 class TestModeSwitchCleanup:
-    def test_transfer_worker_stopped_on_stop(self, tmp_path):
+    def test_transfer_stopped_synchronously(self, tmp_path):
         ctrl = TransferController()
         path = tmp_path / "test.bin"
         path.write_bytes(b"x" * 5000)
         ctrl.select_file(str(path))
-        ctrl.start_presenting(display_index=0, fullscreen=False, marker_size=400)
 
-        ctrl.request_stop()
-        assert ctrl.lifecycle == TransferLifecycle.STOPPING
+        ctrl.start_presenting()
+        assert ctrl.lifecycle == TransferLifecycle.PRESENTING
 
-        for _ in range(100):
-            ctrl.poll()
-            if ctrl.lifecycle in (TransferLifecycle.COMPLETED, TransferLifecycle.FAILED):
-                break
-            time.sleep(0.05)
-
-        if ctrl.needs_display_reclaim:
-            ctrl.reclaim_display()
+        ctrl.stop_presenting()
         assert ctrl.lifecycle == TransferLifecycle.IDLE
 
     def test_campaign_stopped_on_stop(self):
