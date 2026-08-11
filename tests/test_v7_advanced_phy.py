@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
+import numpy as np
 import pygame
 import zxingcpp
 
@@ -39,18 +40,16 @@ def test_quad_qr_lanes_are_independent_and_binary_decodable():
         assert payload[6] == lane["lane_id"]
         assert payload[7] == 4
         matrix = build_advanced_qr_matrix(profile, lane, 0, run_token=0x1234)
-        image = bytearray(len(matrix) * len(matrix))
-        pos = 0
-        for row in matrix:
-            for value in row:
-                image[pos] = 0 if value else 255
-                pos += 1
+        image = np.fromiter(
+            (0 if value else 255 for row in matrix for value in row),
+            dtype=np.uint8,
+            count=len(matrix) * len(matrix),
+        ).reshape((len(matrix), len(matrix)))
         result = zxingcpp.read_barcode(
             image,
-            width=len(matrix),
-            height=len(matrix),
-            format=zxingcpp.BarcodeFormat.QRCode,
+            formats=zxingcpp.BarcodeFormat.QRCode,
             text_mode=zxingcpp.TextMode.Plain,
+            is_pure=True,
         )
         assert result is not None
         assert bytes(result.bytes) == payload
