@@ -255,8 +255,8 @@ class LabDisplayController:
             self.diag.check_late()
 
     def _observe_present_interval(self, interval_ms: float) -> None:
-        """Keep dwell pacing tied to measured presents, not a stale refresh report."""
-        if interval_ms > 0:
+        """Follow measured cadence only after VSync itself has been verified."""
+        if interval_ms > 0 and self.diag.vsync_verified and self.diag.actual_vsync_enabled:
             self.dwell.present_refresh_hz = 1000.0 / interval_ms
 
     def _verify_vsync(self, interval_ms: float) -> None:
