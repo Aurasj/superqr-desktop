@@ -9,12 +9,6 @@ from superqr_desktop.v7_capacity_lab.protocol_bridge import load_qr_ecc_map_mani
 def build_qr_ecc_map_runs(dwell: int, frames: int) -> list[RunSpec]:
     manifest = load_qr_ecc_map_manifest()
     campaign = manifest["campaign"]
-    expected_frames = int(campaign["frame_count"])
-    if frames != expected_frames:
-        # UI still owns the frame-count control, but this experiment's evidence
-        # and run ordering are defined for the canonical 256-frame sample.
-        frames = expected_frames
-
     runs = [
         RunSpec(
             str(item["profile"]),
