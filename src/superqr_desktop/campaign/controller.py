@@ -9,6 +9,7 @@ from __future__ import annotations
 from enum import Enum
 
 from superqr_desktop.campaign.qr_capacity_map import build_qr_capacity_map_runs
+from superqr_desktop.campaign.qr_ecc_map import build_qr_ecc_map_runs
 from superqr_desktop.v7_capacity_lab.campaign import (
     CampaignState,
     Phase1CampaignPresenter,
@@ -37,6 +38,7 @@ class CampaignController:
         "Full grid dwell sweep",
         "V40 cadence sweep",
         "QR capacity cadence map",
+        "QR ECC focused map",
     ]
 
     DWELL_OPTIONS = [2, 3]
@@ -55,22 +57,17 @@ class CampaignController:
         self._display_reclaimed = False
         self._rebuild_runs()
 
-    # -- lifecycle state machine --
-
     @property
     def lifecycle(self) -> CampaignLifecycle:
         return self._lifecycle
 
     @property
     def needs_display_reclaim(self) -> bool:
-        """True exactly once when the UI must reopen the main SDL display."""
         return self._lifecycle in (CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED) and not self._display_reclaimed
 
     def _transition(self, target: CampaignLifecycle) -> None:
         self._lifecycle = target
         self._display_reclaimed = False
-
-    # -- configuration (idempotent; only meaningful in IDLE) --
 
     @property
     def preset(self) -> str:
@@ -124,14 +121,7 @@ class CampaignController:
         self._frames = max(1, min(256, frames))
         self._rebuild_runs()
 
-    # -- lifecycle actions --
-
     def start(self, *, ready_seconds: float = 4.0, done_seconds: float = 2.0) -> bool:
-        """Begin a campaign. Returns False if no runs configured.
-
-        The caller must release the main SDL display BEFORE calling this
-        because the worker process will open its own display.
-        """
         if self._lifecycle != CampaignLifecycle.IDLE:
             return False
         if not self._runs:
@@ -150,7 +140,6 @@ class CampaignController:
         return True
 
     def request_stop(self) -> None:
-        """Ask the worker to stop. Lifecycle becomes STOPPING."""
         if self._lifecycle not in (CampaignLifecycle.STARTING, CampaignLifecycle.RUNNING):
             return
         if self._worker is not None:
@@ -158,10 +147,6 @@ class CampaignController:
         self._transition(CampaignLifecycle.STOPPING)
 
     def reclaim_display(self) -> PresentationSnapshot | None:
-        """Call exactly once when needs_display_reclaim is True.
-
-        Drains the final snapshot, tears down the worker, and returns to IDLE.
-        """
         if self._lifecycle not in (CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED):
             return None
         snapshot = self.snapshot()
@@ -172,10 +157,7 @@ class CampaignController:
         self._transition(CampaignLifecycle.IDLE)
         return snapshot
 
-    # -- polling (call from tick loop) --
-
     def poll(self) -> None:
-        """Advance the state machine based on worker status and snapshots."""
         if self._lifecycle == CampaignLifecycle.IDLE:
             return
 
@@ -211,11 +193,12 @@ class CampaignController:
             return self._worker.snapshot()
         return None
 
-    # -- internal --
-
     def _rebuild_runs(self) -> None:
         if self._preset == "QR capacity cadence map":
             self._runs = build_qr_capacity_map_runs(self._dwell, self._frames)
+            return
+        if self._preset == "QR ECC focused map":
+            self._runs = build_qr_ecc_map_runs(self._dwell, self._frames)
             return
         self._runs = build_campaign(
             self._preset, self._profile, self._dwell, self._frames,
