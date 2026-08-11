@@ -28,6 +28,15 @@ from superqr_desktop.v7_capacity_lab.campaign import (
     build_campaign,
 )
 from superqr_desktop.v7_capacity_lab.phase1_profiles import grid_profiles, qr_controls
+from superqr_desktop.v7_capacity_lab.shapegrid import (
+    default_shapegrid_profile_name,
+    shapegrid_profile,
+    shapegrid_profiles,
+)
+from superqr_desktop.v7_capacity_lab.shapegrid_campaign import (
+    ShapeGridCampaignPresenter,
+    ShapeGridCampaignWorker,
+)
 
 
 class CampaignLifecycle(str, Enum):
@@ -50,6 +59,8 @@ class CampaignController:
         "QR ECC focused map",
         "Phase 0 advanced FAST",
         "Phase 0 advanced selection",
+        "Phase 0 ShapeGrid FAST",
+        "Phase 0 ShapeGrid selection",
     ]
 
     DWELL_OPTIONS = [2, 3]
@@ -63,7 +74,7 @@ class CampaignController:
         self._fullscreen = False
         self._marker_size = 800
         self._runs: list[RunSpec] = []
-        self._worker: Phase1CampaignWorker | AdvancedCampaignWorker | None = None
+        self._worker: Phase1CampaignWorker | AdvancedCampaignWorker | ShapeGridCampaignWorker | None = None
         self._lifecycle = CampaignLifecycle.IDLE
         self._display_reclaimed = False
         self._rebuild_runs()
@@ -99,7 +110,12 @@ class CampaignController:
 
     @property
     def available_profiles(self) -> list[str]:
-        return list(grid_profiles()) + list(qr_controls()) + list(advanced_profiles())
+        return (
+            list(grid_profiles())
+            + list(qr_controls())
+            + list(advanced_profiles())
+            + list(shapegrid_profiles())
+        )
 
     @property
     def runs(self) -> list[RunSpec]:
@@ -136,16 +152,25 @@ class CampaignController:
     def start(self, *, ready_seconds: float = 4.0, done_seconds: float = 2.0) -> bool:
         """Begin a campaign. Returns False if no runs configured.
 
-        Advanced profiles run in their own process-isolated presenter so the
+        Experimental composite families run in isolated presenters so the
         canonical single-lane campaign engine remains behaviorally frozen.
         """
         if self._lifecycle != CampaignLifecycle.IDLE:
             return False
         if not self._runs:
             return False
-        is_advanced = any(run.profile in advanced_profiles() for run in self._runs)
-        if is_advanced and not all(run.profile in advanced_profiles() for run in self._runs):
-            raise ValueError("advanced and canonical profiles cannot share one campaign")
+
+        advanced_names = set(advanced_profiles())
+        shapegrid_names = set(shapegrid_profiles())
+        is_advanced = any(run.profile in advanced_names for run in self._runs)
+        is_shapegrid = any(run.profile in shapegrid_names for run in self._runs)
+        if is_advanced and not all(run.profile in advanced_names for run in self._runs):
+            raise ValueError("advanced multi-lane and other profile families cannot share one campaign")
+        if is_shapegrid and not all(run.profile in shapegrid_names for run in self._runs):
+            raise ValueError("ShapeGrid and other profile families cannot share one campaign")
+        if is_advanced and is_shapegrid:
+            raise ValueError("advanced multi-lane and ShapeGrid require separate campaign workers")
+
         presenter_kwargs = dict(
             display_index=self._display_index,
             fullscreen=self._fullscreen,
@@ -153,7 +178,10 @@ class CampaignController:
             ready_seconds=ready_seconds,
             done_seconds=done_seconds,
         )
-        if is_advanced:
+        if is_shapegrid:
+            presenter = ShapeGridCampaignPresenter(self._runs, **presenter_kwargs)
+            self._worker = ShapeGridCampaignWorker(presenter)
+        elif is_advanced:
             presenter = AdvancedCampaignPresenter(self._runs, **presenter_kwargs)
             self._worker = AdvancedCampaignWorker(presenter)
         else:
@@ -219,6 +247,13 @@ class CampaignController:
             raise ValueError("advanced receiver design ceiling is 30 FPS")
         return RunSpec(name, self._dwell, self._frames, target_fps=fps)
 
+    def _shapegrid_run(self, name: str) -> RunSpec:
+        profile = shapegrid_profile(name)
+        fps = float(profile["target_fps"])
+        if fps != 20.0:
+            raise ValueError("ShapeGrid Phase 0 profiles must run at exactly 20 FPS")
+        return RunSpec(name, self._dwell, self._frames, target_fps=fps)
+
     def _rebuild_runs(self) -> None:
         if self._preset == "QR capacity cadence map":
             self._runs = build_qr_capacity_map_runs(self._dwell, self._frames)
@@ -237,6 +272,16 @@ class CampaignController:
                 "advanced_quad_qr_v27_l_ceiling30",
             ]
             self._runs = [self._advanced_run(name) for name in names]
+            return
+        if self._preset == "Phase 0 ShapeGrid FAST":
+            self._runs = [self._shapegrid_run(default_shapegrid_profile_name())]
+            return
+        if self._preset == "Phase 0 ShapeGrid selection":
+            names = [profile["name"] for profile in shapegrid_profiles().values()]
+            self._runs = [self._shapegrid_run(name) for name in names]
+            return
+        if self._preset == "Selected profile" and self._profile in shapegrid_profiles():
+            self._runs = [self._shapegrid_run(self._profile)]
             return
         if self._preset == "Selected profile" and self._profile in advanced_profiles():
             self._runs = [self._advanced_run(self._profile)]
