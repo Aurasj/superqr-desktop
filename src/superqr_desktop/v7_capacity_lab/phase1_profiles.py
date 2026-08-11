@@ -13,6 +13,7 @@ from superqr_desktop.v7_capacity_lab.protocol_bridge import (
     get_protocol_prng,
     load_phy_selection_manifest,
     load_qr_capacity_map_manifest,
+    load_qr_ecc_map_manifest,
 )
 from superqr_desktop.v7_capacity_lab.run_sync import LabRunEnvelope, RunState
 
@@ -21,11 +22,14 @@ class Phase1ManifestError(RuntimeError):
     pass
 
 
+ECC_IDS = {"L": 1, "M": 2, "Q": 3, "H": 4}
+
+
 class _QrControlRegistry(dict[str, dict]):
     """Canonical QR mapping with lab-extension lookup by explicit name.
 
     Iteration remains canonical so baseline campaigns stay frozen at V27/V40.
-    Extension profiles are available through membership and item lookup for
+    Extension profiles are available through membership and item lookup only for
     dedicated Phase 0 campaigns.
     """
 
@@ -58,22 +62,41 @@ def qr_capacity_map_controls() -> dict[str, dict]:
     return {entry["name"]: entry for entry in manifest["profiles"]}
 
 
+def qr_ecc_map_controls() -> dict[str, dict]:
+    manifest = load_qr_ecc_map_manifest()
+    return {entry["name"]: entry for entry in manifest["profiles"]}
+
+
+def qr_extension_controls() -> dict[str, dict]:
+    extensions: dict[str, dict] = {}
+    for source in (qr_capacity_map_controls(), qr_ecc_map_controls()):
+        overlap = set(extensions).intersection(source)
+        if overlap:
+            raise Phase1ManifestError(f"duplicate QR extension profiles: {sorted(overlap)}")
+        extensions.update(source)
+    return extensions
+
+
 def qr_controls() -> _QrControlRegistry:
     manifest = load_phy_selection_manifest()
     canonical = {entry["name"]: entry for entry in manifest["qr_controls"]}
-    return _QrControlRegistry(canonical, qr_capacity_map_controls())
+    extensions = qr_extension_controls()
+    overlap = set(canonical).intersection(extensions)
+    if overlap:
+        raise Phase1ManifestError(f"QR extension shadows canonical profile: {sorted(overlap)}")
+    return _QrControlRegistry(canonical, extensions)
 
 
 def profile_id(profile_name: str) -> int:
     names = list(grid_profiles()) + list(qr_controls())
     if profile_name in names:
         return names.index(profile_name)
-    extension = qr_capacity_map_controls().get(profile_name)
+    extension = qr_extension_controls().get(profile_name)
     if extension is not None:
         profile_id_value = int(extension["profile_id"])
         if profile_id_value < len(names):
             raise Phase1ManifestError(
-                f"QR capacity-map profile id collides with canonical profiles: {profile_name}"
+                f"QR extension profile id collides with canonical profiles: {profile_name}"
             )
         return profile_id_value
     raise Phase1ManifestError(f"Unknown profile: {profile_name}")
@@ -141,6 +164,19 @@ def validate_grid_vectors() -> None:
                 )
 
 
+def qr_ecc_id(control: dict) -> int:
+    error_correction = str(control["error_correction"]).upper()
+    expected = ECC_IDS.get(error_correction)
+    if expected is None:
+        raise Phase1ManifestError(f"Unsupported QR ECC: {error_correction}")
+    declared = int(control.get("ecc_id", expected))
+    if declared != expected:
+        raise Phase1ManifestError(
+            f"QR ECC id mismatch for {control['name']}: {declared} != {expected}"
+        )
+    return declared
+
+
 def build_qr_control_payload(
     control: dict,
     frame_index: int,
@@ -154,7 +190,7 @@ def build_qr_control_payload(
     body = bytearray(frame_bytes - 4)
     body[0:4] = b"SQP1"
     body[4] = int(control["version"])
-    body[5] = 1
+    body[5] = qr_ecc_id(control)
     seed = int(load_phy_selection_manifest()["seed"])
     struct.pack_into("<I", body, 6, frame_index)
     struct.pack_into("<I", body, 10, seed)
@@ -206,4 +242,9 @@ def validate_qr_vectors() -> None:
 
 def validate_qr_capacity_map_vectors() -> None:
     for control in qr_capacity_map_controls().values():
+        _validate_qr_control(control)
+
+
+def validate_qr_ecc_map_vectors() -> None:
+    for control in qr_ecc_map_controls().values():
         _validate_qr_control(control)
