@@ -60,6 +60,10 @@ class ShapeGridFrameComposer:
         rows = int(profile["grid_rows"])
         return min(rect.width / (cols * 6.0), rect.height / (rows * 6.0))
 
+    def subcell_scale(self, profile: dict) -> int:
+        """Compatibility gate: whole projected subcell pixels available."""
+        return int(self.projected_subcell_px(profile))
+
     def prepare(self, profile: dict, cells: bytes, *, sync_bits: list[int]) -> None:
         started = time.perf_counter_ns()
         rows = int(profile["grid_rows"])
