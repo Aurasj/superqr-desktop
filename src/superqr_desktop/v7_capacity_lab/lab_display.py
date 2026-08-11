@@ -8,6 +8,12 @@ from enum import Enum, auto
 
 import pygame
 
+from superqr_desktop.v7_capacity_lab.protocol_bridge import load_phy_selection_manifest
+
+
+REFERENCE_REFRESH_HZ = float(load_phy_selection_manifest()["reference_refresh_hz"])
+FALLBACK_REFRESH_HZ = REFERENCE_REFRESH_HZ
+
 
 class TimingMode(Enum):
     VSYNC_MODE = auto()
@@ -71,13 +77,27 @@ class DisplayDiagnostics:
 
 @dataclass
 class DwellState:
+    """Count logical dwell in canonical 60 Hz reference epochs.
+
+    A high-refresh display may present the same optical frame more than once per
+    reference epoch. Fractional accumulation keeps the logical frame cadence
+    independent of the monitor's physical refresh rate while still allowing
+    every VSync to present the current surface.
+    """
+
     dwell_epochs: int
+    present_refresh_hz: float = REFERENCE_REFRESH_HZ
+    reference_refresh_hz: float = REFERENCE_REFRESH_HZ
     presents_for_current_frame: int = 0
     logical_frame_index: int = 0
+    _reference_epochs: float = 0.0
 
     def record_present(self) -> bool:
         self.presents_for_current_frame += 1
-        if self.presents_for_current_frame >= self.dwell_epochs:
+        present_hz = self.present_refresh_hz if self.present_refresh_hz > 0 else self.reference_refresh_hz
+        self._reference_epochs += self.reference_refresh_hz / present_hz
+        if self._reference_epochs + 1e-9 >= self.dwell_epochs:
+            self._reference_epochs = max(0.0, self._reference_epochs - self.dwell_epochs)
             self.presents_for_current_frame = 0
             return True
         return False
@@ -87,9 +107,6 @@ class DwellState:
 
     def timer_tick(self) -> bool:
         return True
-
-
-FALLBACK_REFRESH_HZ = 60.0
 
 
 class LabDisplayController:
@@ -205,7 +222,10 @@ class LabDisplayController:
             self.diag.actual_vsync_enabled = False
             self.diag.vsync_verified = False
             self.diag.timing_note = "paced timer fallback"
-        self.diag.expected_logical_dwell_ms = self.diag.dwell_epochs * self.diag.refresh_period_ms
+        self.dwell.present_refresh_hz = self.diag.reported_refresh_hz
+        self.diag.expected_logical_dwell_ms = (
+            self.diag.dwell_epochs * 1000.0 / REFERENCE_REFRESH_HZ
+        )
 
     def present(self, frame_surface: pygame.Surface) -> None:
         if self.screen is None or not pygame.display.get_init():
@@ -250,7 +270,10 @@ class LabDisplayController:
             self.diag.actual_vsync_enabled = False
             self.diag.vsync_verified = True
             self.diag.timing_mode = TimingMode.FALLBACK_TIMER_MODE
-            self.diag.timing_note = f"driver VSync rejected: measured {median:.2f} ms"
+            self.diag.reported_refresh_hz = FALLBACK_REFRESH_HZ
+            self.diag.refresh_period_ms = 1000.0 / FALLBACK_REFRESH_HZ
+            self.dwell.present_refresh_hz = FALLBACK_REFRESH_HZ
+            self.diag.timing_note = f"driver VSync rejected: measured {median:.2f} ms; using 60 Hz reference pacing"
             self._next_timer_deadline = time.perf_counter() + self.diag.refresh_period_ms / 1000.0
 
     def _pace_fallback(self) -> None:
@@ -289,14 +312,17 @@ class LabDisplayController:
         self.diag.estimated_skipped_refreshes = 0
         self.diag._recent_intervals.clear()
         self.diag._all_intervals.clear()
-        self.dwell = DwellState(dwell_epochs=self.dwell_epochs)
+        self.dwell = DwellState(
+            dwell_epochs=self.dwell_epochs,
+            present_refresh_hz=self.diag.reported_refresh_hz or REFERENCE_REFRESH_HZ,
+        )
         self._last_present_time = None
         self._dwell_start_time = time.perf_counter()
 
     def configure_dwell(self, dwell_epochs: int) -> None:
         self.dwell_epochs = dwell_epochs
         self.diag.dwell_epochs = dwell_epochs
-        self.diag.expected_logical_dwell_ms = dwell_epochs * self.diag.refresh_period_ms
+        self.diag.expected_logical_dwell_ms = dwell_epochs * 1000.0 / REFERENCE_REFRESH_HZ
         self.reset_measurement()
 
     def close(self) -> None:
