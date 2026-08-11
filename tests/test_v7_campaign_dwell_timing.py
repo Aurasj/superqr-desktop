@@ -2,6 +2,7 @@
 
 from superqr_desktop.v7_capacity_lab.lab_display import (
     DwellState,
+    LabDisplayController,
     REFERENCE_REFRESH_HZ,
 )
 
@@ -41,4 +42,18 @@ def test_high_refresh_uses_fractional_reference_epochs_not_three_raw_presents():
     for _ in range(141):
         if dwell.record_present():
             advances += 1
+    assert advances == 20
+
+
+def test_measured_present_interval_overrides_stale_refresh_report():
+    display = LabDisplayController(dwell_epochs=3)
+    display.dwell.present_refresh_hz = 60.0
+
+    advances = 0
+    actual_refresh_hz = 165.0
+    for _ in range(165):
+        display._observe_present_interval(1000.0 / actual_refresh_hz)
+        if display.dwell.record_present():
+            advances += 1
+
     assert advances == 20
