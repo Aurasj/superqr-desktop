@@ -27,6 +27,7 @@ _protocol_available: bool | None = None
 _reference_vectors_cache: dict | None = None
 _v6_contract_cache: dict | None = None
 _phy_selection_manifest_cache: dict | None = None
+_qr_capacity_map_cache: dict | None = None
 
 
 # ── Path resolution ──────────────────────────────────────────────────────
@@ -106,8 +107,30 @@ def load_v6_visual_contract() -> dict[str, Any]:
     return _v6_contract_cache
 
 
+def load_qr_capacity_map_manifest() -> dict[str, Any]:
+    """Load the lab-only QR capacity/cadence map extension."""
+    global _qr_capacity_map_cache
+    if _qr_capacity_map_cache is None:
+        root = get_protocol_root()
+        protocol_path = (
+            root / "test-vectors" / "v7-phy-selection" / "qr_capacity_map.json"
+            if root is not None else None
+        )
+        path = (
+            protocol_path
+            if protocol_path is not None and protocol_path.is_file()
+            else _get_data_dir() / "qr_capacity_map.json"
+        )
+        with open(path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        if manifest.get("status") != "LAB_ONLY_NOT_A_V7_WIRE_CONTRACT":
+            raise ProtocolBridgeError("QR capacity map is not marked lab-only")
+        _qr_capacity_map_cache = manifest
+    return _qr_capacity_map_cache
+
+
 def load_phy_selection_manifest() -> dict[str, Any]:
-    """Load the canonical laboratory-only Phase 1 PHY manifest."""
+    """Load the canonical laboratory-only Phase 1 PHY manifest plus lab extensions."""
     global _phy_selection_manifest_cache
     if _phy_selection_manifest_cache is None:
         root = get_protocol_root()
@@ -116,7 +139,11 @@ def load_phy_selection_manifest() -> dict[str, Any]:
         else:
             path = _get_data_dir() / "phase1_manifest.json"
         with open(path, "r", encoding="utf-8") as f:
-            _phy_selection_manifest_cache = json.load(f)
+            base = json.load(f)
+        extension = load_qr_capacity_map_manifest()
+        merged = dict(base)
+        merged["qr_controls"] = list(base["qr_controls"]) + list(extension["profiles"])
+        _phy_selection_manifest_cache = merged
     return _phy_selection_manifest_cache
 
 
