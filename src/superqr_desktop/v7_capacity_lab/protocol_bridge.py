@@ -30,6 +30,7 @@ _phy_selection_manifest_cache: dict | None = None
 _qr_capacity_map_cache: dict | None = None
 _qr_ecc_map_cache: dict | None = None
 _advanced_phy_cache: dict | None = None
+_shapegrid_cache: dict | None = None
 
 
 def _find_desktop_root() -> Path:
@@ -138,6 +139,21 @@ def load_advanced_phy_manifest() -> dict[str, Any]:
         if float(_advanced_phy_cache["receiver_constraint"]["max_fps"]) > 30.0:
             raise ProtocolBridgeError("advanced PHY exceeds the 30 FPS receiver design ceiling")
     return _advanced_phy_cache
+
+
+def load_shapegrid_manifest() -> dict[str, Any]:
+    """Load the lab-only Chroma4 ShapeGrid Phase 0 candidate."""
+    global _shapegrid_cache
+    if _shapegrid_cache is None:
+        _shapegrid_cache = _load_lab_extension("chroma4_shapegrid.json", "Chroma4 ShapeGrid")
+        if _shapegrid_cache.get("production_phy_frozen") is not False:
+            raise ProtocolBridgeError("ShapeGrid lab artifact must not freeze the production PHY")
+        receiver = _shapegrid_cache["receiver_constraint"]
+        if float(receiver["design_target_fps"]) != 20.0:
+            raise ProtocolBridgeError("ShapeGrid FAST design target must remain 20 FPS")
+        if float(receiver["max_fps"]) > 30.0:
+            raise ProtocolBridgeError("ShapeGrid exceeds the 30 FPS receiver design ceiling")
+    return _shapegrid_cache
 
 
 def load_phy_selection_manifest() -> dict[str, Any]:
