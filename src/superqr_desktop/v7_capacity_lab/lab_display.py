@@ -248,10 +248,16 @@ class LabDisplayController:
         interval_ms = 0.0 if self._last_present_time is None else (now - self._last_present_time) * 1000.0
         self._last_present_time = now
         self.diag.record_present((t1 - t0) // 1000, interval_ms)
+        self._observe_present_interval(interval_ms)
         self.diag.present_count += 1
         self._verify_vsync(interval_ms)
         if self.diag.actual_vsync_enabled:
             self.diag.check_late()
+
+    def _observe_present_interval(self, interval_ms: float) -> None:
+        """Keep dwell pacing tied to measured presents, not a stale refresh report."""
+        if interval_ms > 0:
+            self.dwell.present_refresh_hz = 1000.0 / interval_ms
 
     def _verify_vsync(self, interval_ms: float) -> None:
         if self.diag.vsync_verified or not self.diag.driver_vsync_reported or interval_ms <= 0:
