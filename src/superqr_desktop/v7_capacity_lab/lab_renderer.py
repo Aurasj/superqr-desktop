@@ -15,6 +15,7 @@ import pygame
 
 from superqr_desktop.v7_capacity_lab.protocol_bridge import (
     load_phy_selection_manifest,
+    load_qr_capacity_map_manifest,
     get_protocol_geometry,
     get_protocol_palettes,
 )
@@ -249,12 +250,14 @@ class LabRenderer:
         return pygame.image.frombytes(bytes(buf), (total, total), "RGB")
 
     def _qr_control_for_total_modules(self, total_modules: int) -> dict:
+        controls = list(load_phy_selection_manifest()["qr_controls"])
+        controls.extend(load_qr_capacity_map_manifest()["profiles"])
         matches = [
-            control for control in load_phy_selection_manifest()["qr_controls"]
+            control for control in controls
             if int(control["total_modules"]) == total_modules
         ]
         if len(matches) != 1:
-            raise ValueError(f"no unique canonical QR control for {total_modules} total modules")
+            raise ValueError(f"no unique QR control for {total_modules} total modules")
         return matches[0]
 
     def prepare_qr_native_surface(self, native: pygame.Surface) -> None:
