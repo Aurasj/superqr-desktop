@@ -11,6 +11,7 @@ from superqr_desktop.v7_capacity_lab.protocol_bridge import (
     load_shapegrid_manifest,
 )
 from superqr_desktop.v7_capacity_lab.shapegrid import INACTIVE, symbol_to_shape_color
+from superqr_desktop.v7_capacity_lab.shapegrid_geometry import canonical_grid_bbox
 
 
 def _rgb(value: str) -> tuple[int, int, int]:
@@ -45,16 +46,19 @@ class ShapeGridFrameComposer:
                         atlas[symbol, row, col] = color
         return atlas
 
-    def reference_rect(self) -> pygame.Rect:
-        return self.renderer._compute_display_payload_rect(
-            self.manifest["acquisition"]["reference_payload_bbox"]
+    def canonical_rect(self, profile: dict) -> tuple[float, float, float, float]:
+        return canonical_grid_bbox(
+            profile, self.manifest["acquisition"]["reference_payload_bbox"]
         )
 
-    def subcell_scale(self, profile: dict) -> int:
-        rect = self.reference_rect()
-        width = int(profile["grid_cols"]) * 6
-        height = int(profile["grid_rows"]) * 6
-        return min(rect.width // width, rect.height // height)
+    def display_rect(self, profile: dict) -> pygame.Rect:
+        return self.renderer._compute_display_payload_rect(self.canonical_rect(profile))
+
+    def projected_subcell_px(self, profile: dict) -> float:
+        rect = self.display_rect(profile)
+        cols = int(profile["grid_cols"])
+        rows = int(profile["grid_rows"])
+        return min(rect.width / (cols * 6.0), rect.height / (rows * 6.0))
 
     def prepare(self, profile: dict, cells: bytes, *, sync_bits: list[int]) -> None:
         started = time.perf_counter_ns()
@@ -66,15 +70,15 @@ class ShapeGridFrameComposer:
             )
 
         frame = self.renderer._carrier_display.copy()
-        rect = self.reference_rect()
+        rect = self.display_rect(profile)
         native_width = cols * 6
         native_height = rows * 6
-        scale = min(rect.width // native_width, rect.height // native_height)
-        if scale < 1:
+        subcell_px = self.projected_subcell_px(profile)
+        if subcell_px < 1.0:
             minimum = int(profile.get("minimum_reference_marker_px_for_subcell_scale_1", 0))
             suffix = f"; profile minimum reference marker is ~{minimum}px" if minimum else ""
             raise ValueError(
-                f"ShapeGrid {profile['name']} cannot fit integer 6x6 subcells at marker "
+                f"ShapeGrid {profile['name']} projects below 1 px/subcell at marker "
                 f"{self.renderer.marker_size}px{suffix}"
             )
 
@@ -86,15 +90,11 @@ class ShapeGridFrameComposer:
         native = pygame.image.frombuffer(
             rgb.tobytes(), (native_width, native_height), "RGB"
         ).copy()
-        if scale > 1:
-            rendered = pygame.transform.scale(
-                native, (native_width * scale, native_height * scale)
-            )
+        if rect.size != native.get_size():
+            rendered = pygame.transform.scale(native, rect.size)
         else:
             rendered = native
-        x = rect.x + (rect.width - rendered.get_width()) // 2
-        y = rect.y + (rect.height - rendered.get_height()) // 2
-        frame.blit(rendered, (x, y))
+        frame.blit(rendered, rect.topleft)
 
         sync = self.phase1["run_sync"]
         for bbox in (sync["top_bbox"], sync["bottom_bbox"]):
