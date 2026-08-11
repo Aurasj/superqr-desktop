@@ -29,9 +29,8 @@ _v6_contract_cache: dict | None = None
 _phy_selection_manifest_cache: dict | None = None
 _qr_capacity_map_cache: dict | None = None
 _qr_ecc_map_cache: dict | None = None
+_advanced_phy_cache: dict | None = None
 
-
-# ── Path resolution ──────────────────────────────────────────────────────
 
 def _find_desktop_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent.parent
@@ -47,12 +46,10 @@ def _try_find_protocol_root() -> Path | None:
         candidate = Path(env_root).resolve()
         if _is_valid_protocol_root(candidate):
             return candidate
-
     desktop_root = _find_desktop_root()
     sibling = desktop_root.parent / "superqr-protocol"
     if sibling.is_dir() and _is_valid_protocol_root(sibling):
         return sibling
-
     return None
 
 
@@ -79,8 +76,6 @@ def get_protocol_root() -> Path | None:
             sys.path.insert(0, str(_protocol_root))
     return _protocol_root
 
-
-# ── JSON data loading (from packaged data or protocol repo) ───────────────
 
 def load_reference_vectors() -> dict[str, Any]:
     global _reference_vectors_cache
@@ -110,15 +105,8 @@ def load_v6_visual_contract() -> dict[str, Any]:
 
 def _load_lab_extension(filename: str, cache_name: str) -> dict[str, Any]:
     root = get_protocol_root()
-    protocol_path = (
-        root / "test-vectors" / "v7-phy-selection" / filename
-        if root is not None else None
-    )
-    path = (
-        protocol_path
-        if protocol_path is not None and protocol_path.is_file()
-        else _get_data_dir() / filename
-    )
+    protocol_path = root / "test-vectors" / "v7-phy-selection" / filename if root is not None else None
+    path = protocol_path if protocol_path is not None and protocol_path.is_file() else _get_data_dir() / filename
     with open(path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
     if manifest.get("status") != "LAB_ONLY_NOT_A_V7_WIRE_CONTRACT":
@@ -130,9 +118,7 @@ def load_qr_capacity_map_manifest() -> dict[str, Any]:
     """Load the lab-only QR capacity/cadence map extension."""
     global _qr_capacity_map_cache
     if _qr_capacity_map_cache is None:
-        _qr_capacity_map_cache = _load_lab_extension(
-            "qr_capacity_map.json", "QR capacity map",
-        )
+        _qr_capacity_map_cache = _load_lab_extension("qr_capacity_map.json", "QR capacity map")
     return _qr_capacity_map_cache
 
 
@@ -140,10 +126,18 @@ def load_qr_ecc_map_manifest() -> dict[str, Any]:
     """Load the lab-only focused QR ECC map extension."""
     global _qr_ecc_map_cache
     if _qr_ecc_map_cache is None:
-        _qr_ecc_map_cache = _load_lab_extension(
-            "qr_ecc_map.json", "QR ECC map",
-        )
+        _qr_ecc_map_cache = _load_lab_extension("qr_ecc_map.json", "QR ECC map")
     return _qr_ecc_map_cache
+
+
+def load_advanced_phy_manifest() -> dict[str, Any]:
+    """Load the lab-only advanced multi-lane Phase 0 PHY extension."""
+    global _advanced_phy_cache
+    if _advanced_phy_cache is None:
+        _advanced_phy_cache = _load_lab_extension("advanced_phy.json", "advanced PHY")
+        if float(_advanced_phy_cache["receiver_constraint"]["max_fps"]) > 30.0:
+            raise ProtocolBridgeError("advanced PHY exceeds the 30 FPS receiver design ceiling")
+    return _advanced_phy_cache
 
 
 def load_phy_selection_manifest() -> dict[str, Any]:
@@ -159,8 +153,6 @@ def load_phy_selection_manifest() -> dict[str, Any]:
             _phy_selection_manifest_cache = json.load(f)
     return _phy_selection_manifest_cache
 
-
-# ── Module access (local or protocol repo) ────────────────────────────────
 
 def get_protocol_model():
     root = get_protocol_root()
