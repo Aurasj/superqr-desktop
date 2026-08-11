@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main, rebuild/v7-phase0-clean ]
+    branches: [ main, rebuild/v7-phase0-clean, rebuild/v7-phase0-chroma4-fast ]
   pull_request:
     branches: [ main, rebuild/v7-phase0-clean ]
 
@@ -90,6 +90,14 @@ jobs:
           assert len(phase1['grid_profiles']) == 5
           assert len(phase1['qr_controls']) == 2
           print('8. V7 Phase 1 PHY artifact packaged OK')
+
+          # 9. Chroma4 ShapeGrid artifact and deterministic codec survive packaging
+          from superqr_desktop.v7_capacity_lab.protocol_bridge import load_shapegrid_manifest
+          from superqr_desktop.v7_capacity_lab.shapegrid import validate_shapegrid_vectors
+          shapegrid = load_shapegrid_manifest()
+          assert [p['profile_id'] for p in shapegrid['profiles']] == [18, 19, 20]
+          validate_shapegrid_vectors()
+          print('9. V7 Chroma4 ShapeGrid packaged vectors OK')
 
           print()
           print('All packaged wheel smoke checks passed.')
