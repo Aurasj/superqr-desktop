@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from enum import Enum
 
+from superqr_desktop.campaign.qr_capacity_map import build_qr_capacity_map_runs
 from superqr_desktop.v7_capacity_lab.campaign import (
     CampaignState,
     Phase1CampaignPresenter,
@@ -35,6 +36,7 @@ class CampaignController:
         "Monochrome density sweep",
         "Full grid dwell sweep",
         "V40 cadence sweep",
+        "QR capacity cadence map",
     ]
 
     DWELL_OPTIONS = [2, 3]
@@ -212,6 +214,9 @@ class CampaignController:
     # -- internal --
 
     def _rebuild_runs(self) -> None:
+        if self._preset == "QR capacity cadence map":
+            self._runs = build_qr_capacity_map_runs(self._dwell, self._frames)
+            return
         self._runs = build_campaign(
             self._preset, self._profile, self._dwell, self._frames,
         )
