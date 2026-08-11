@@ -130,7 +130,7 @@ def load_qr_capacity_map_manifest() -> dict[str, Any]:
 
 
 def load_phy_selection_manifest() -> dict[str, Any]:
-    """Load the canonical laboratory-only Phase 1 PHY manifest plus lab extensions."""
+    """Load the canonical laboratory-only Phase 1 PHY-selection manifest."""
     global _phy_selection_manifest_cache
     if _phy_selection_manifest_cache is None:
         root = get_protocol_root()
@@ -139,11 +139,7 @@ def load_phy_selection_manifest() -> dict[str, Any]:
         else:
             path = _get_data_dir() / "phase1_manifest.json"
         with open(path, "r", encoding="utf-8") as f:
-            base = json.load(f)
-        extension = load_qr_capacity_map_manifest()
-        merged = dict(base)
-        merged["qr_controls"] = list(base["qr_controls"]) + list(extension["profiles"])
-        _phy_selection_manifest_cache = merged
+            _phy_selection_manifest_cache = json.load(f)
     return _phy_selection_manifest_cache
 
 
