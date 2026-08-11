@@ -34,6 +34,7 @@ class CampaignController:
         "All canonical profiles",
         "Monochrome density sweep",
         "Full grid dwell sweep",
+        "V40 cadence sweep",
     ]
 
     DWELL_OPTIONS = [2, 3]
