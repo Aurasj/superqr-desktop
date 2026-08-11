@@ -44,6 +44,7 @@ class RunSpec:
     profile: str
     dwell_epochs: int
     frame_count: int
+    target_fps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,11 @@ def build_campaign(preset: str, profile: str, dwell: int, frames: int) -> list[R
         names = [name for name in grid_profiles() if name.startswith("mono_")]
     elif preset == "Full grid dwell sweep":
         return [RunSpec(name, epoch, frames) for epoch in (3, 2) for name in grid_profiles()]
+    elif preset == "V40 cadence sweep":
+        return [
+            RunSpec("qr_v40_l_ceiling", dwell, frames, target_fps=fps)
+            for fps in (24.0, 30.0, 40.0, 60.0)
+        ]
     else:
         raise ValueError(f"unknown campaign preset: {preset}")
     return [RunSpec(name, dwell, frames) for name in names]
@@ -318,7 +324,9 @@ class Phase1CampaignPresenter:
         if self.spec.profile in grid_profiles() and self.display.diag.timing_mode == TimingMode.VSYNC_MODE:
             return self.display.dwell.record_present()
         fps = (
-            float(qr_controls()[self.spec.profile]["target_fps"])
+            self.spec.target_fps
+            if self.spec.target_fps is not None
+            else float(qr_controls()[self.spec.profile]["target_fps"])
             if self.spec.profile in qr_controls()
             else self.display.diag.reported_refresh_hz / self.spec.dwell_epochs
         )
