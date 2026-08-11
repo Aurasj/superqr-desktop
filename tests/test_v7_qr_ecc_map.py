@@ -56,8 +56,13 @@ def test_focused_campaign_covers_each_version_ecc_fps_once():
     assert len(runs) == manifest["campaign"]["run_count"] == 21
     assert max(run.target_fps for run in runs) == 30.0
 
-    controls = [run for run, item in zip(runs, manifest["campaign"]["runs"]) if item["role"].startswith("stability_control")]
-    assert [runs.index(run) for run in controls] == [0, 10, 20]
+    control_positions = [
+        index
+        for index, item in enumerate(manifest["campaign"]["runs"])
+        if item["role"].startswith("stability_control")
+    ]
+    controls = [runs[index] for index in control_positions]
+    assert control_positions == [0, 10, 20]
     assert all(run.profile == "qr_v27_l_safe" and run.target_fps == 24.0 for run in controls)
 
     candidates = [
