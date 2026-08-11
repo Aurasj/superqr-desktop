@@ -57,17 +57,22 @@ class CampaignController:
         self._display_reclaimed = False
         self._rebuild_runs()
 
+    # -- lifecycle state machine --
+
     @property
     def lifecycle(self) -> CampaignLifecycle:
         return self._lifecycle
 
     @property
     def needs_display_reclaim(self) -> bool:
+        """True exactly once when the UI must reopen the main SDL display."""
         return self._lifecycle in (CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED) and not self._display_reclaimed
 
     def _transition(self, target: CampaignLifecycle) -> None:
         self._lifecycle = target
         self._display_reclaimed = False
+
+    # -- configuration (idempotent; only meaningful in IDLE) --
 
     @property
     def preset(self) -> str:
@@ -121,7 +126,14 @@ class CampaignController:
         self._frames = max(1, min(256, frames))
         self._rebuild_runs()
 
+    # -- lifecycle actions --
+
     def start(self, *, ready_seconds: float = 4.0, done_seconds: float = 2.0) -> bool:
+        """Begin a campaign. Returns False if no runs configured.
+
+        The caller must release the main SDL display BEFORE calling this
+        because the worker process will open its own display.
+        """
         if self._lifecycle != CampaignLifecycle.IDLE:
             return False
         if not self._runs:
@@ -140,6 +152,7 @@ class CampaignController:
         return True
 
     def request_stop(self) -> None:
+        """Ask the worker to stop. Lifecycle becomes STOPPING."""
         if self._lifecycle not in (CampaignLifecycle.STARTING, CampaignLifecycle.RUNNING):
             return
         if self._worker is not None:
@@ -147,6 +160,10 @@ class CampaignController:
         self._transition(CampaignLifecycle.STOPPING)
 
     def reclaim_display(self) -> PresentationSnapshot | None:
+        """Call exactly once when needs_display_reclaim is True.
+
+        Drains the final snapshot, tears down the worker, and returns to IDLE.
+        """
         if self._lifecycle not in (CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED):
             return None
         snapshot = self.snapshot()
@@ -157,7 +174,10 @@ class CampaignController:
         self._transition(CampaignLifecycle.IDLE)
         return snapshot
 
+    # -- polling (call from tick loop) --
+
     def poll(self) -> None:
+        """Advance the state machine based on worker status and snapshots."""
         if self._lifecycle == CampaignLifecycle.IDLE:
             return
 
@@ -192,6 +212,8 @@ class CampaignController:
         if self._worker is not None:
             return self._worker.snapshot()
         return None
+
+    # -- internal --
 
     def _rebuild_runs(self) -> None:
         if self._preset == "QR capacity cadence map":
