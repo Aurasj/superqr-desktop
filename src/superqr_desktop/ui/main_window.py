@@ -21,6 +21,13 @@ from superqr_desktop.transfer.timing import TransferCadenceClock
 from superqr_desktop.ui import styles
 from superqr_desktop.v7.profiles import BY_LABEL, PROFILES
 from superqr_desktop.v7_capacity_lab.lab_renderer import LabRenderer
+from superqr_desktop.v7_capacity_lab.advanced_phy import (
+    advanced_profile,
+    advanced_profiles,
+    build_advanced_envelope,
+    build_advanced_qr_matrix,
+)
+from superqr_desktop.v7_capacity_lab.advanced_renderer import AdvancedFrameComposer
 from superqr_desktop.v7_capacity_lab.phase1_profiles import (
     GridFrameSequence,
     build_qr_matrix,
@@ -29,6 +36,14 @@ from superqr_desktop.v7_capacity_lab.phase1_profiles import (
     qr_controls,
 )
 from superqr_desktop.v7_capacity_lab.protocol_bridge import load_phy_selection_manifest
+from superqr_desktop.v7_capacity_lab.run_sync import LabRunEnvelope, RunState
+from superqr_desktop.v7_capacity_lab.shapegrid import (
+    build_shapegrid_frame_cells,
+    shapegrid_profile,
+    shapegrid_profiles,
+)
+from superqr_desktop.v7_capacity_lab.shapegrid_renderer import ShapeGridFrameComposer
+
 
 SIZE_PRESETS = [1000, 900, 800, 700, 600, 500, 400]
 
@@ -87,10 +102,12 @@ class MainWindow:
         self._campaign_frames_var = tk.IntVar(value=256)
         self._campaign_dwell_var = tk.StringVar(value="3")
         self._campaign_progress_label = tk.StringVar(value="")
+        self._campaign_speed_label = tk.StringVar(value="")
 
         # -- build UI --
         self._style = styles.setup_styles(self.root)
         self._build_ui()
+        self._update_campaign_ui()
         self._apply_display()
 
     # ------------------------------------------------------------------
@@ -272,6 +289,11 @@ class MainWindow:
             card, textvariable=self._campaign_progress_label, style="Muted.TLabel",
         )
         self._lbl_campaign_progress.pack(anchor="w", pady=(9, 0))
+        # speed in seconds
+        self._lbl_campaign_speed = ttk.Label(
+            card, textvariable=self._campaign_speed_label, style="Muted.TLabel",
+        )
+        self._lbl_campaign_speed.pack(anchor="w", pady=(4, 0))
 
     def _build_status_bar(self, parent):
         card = styles.card(parent, "STATUS")
@@ -488,6 +510,61 @@ class MainWindow:
                 )
                 native = renderer.build_qr_native_surface(matrix, quiet)
                 renderer.prepare_qr_native_surface(native)
+            elif candidate in advanced_profiles():
+                prof = advanced_profile(candidate)
+                composer = AdvancedFrameComposer(renderer)
+                lane_surfaces = {}
+                for lane in prof["lanes"]:
+                    if lane["kind"] == "qr":
+                        lane_id = int(lane["lane_id"])
+                        quiet = int(lane["quiet_zone_modules"])
+                        matrix = build_advanced_qr_matrix(
+                            prof,
+                            lane,
+                            0,
+                            run_token=0x0001,
+                            frame_count=1,
+                            dwell_epochs=int(self._campaign_dwell_var.get()),
+                        )
+                        native = renderer.build_qr_native_surface(matrix, quiet)
+                        lane_surfaces[lane_id] = native
+                sync_bits = None
+                if bool(prof["requires_carrier"]):
+                    sync_bits = build_advanced_envelope(
+                        prof,
+                        0x0001,
+                        0,
+                        1,
+                        int(self._campaign_dwell_var.get()),
+                    ).bits()
+                composer.prepare(prof, 0, lane_surfaces, sync_bits=sync_bits)
+            elif candidate in shapegrid_profiles():
+                prof = shapegrid_profile(candidate)
+                composer = ShapeGridFrameComposer(renderer)
+                if composer.subcell_scale(prof) < 1:
+                    minimum = int(prof.get("minimum_reference_marker_px_for_subcell_scale_1", 0))
+                    suffix = f"; profile minimum reference marker is ~{minimum}px" if minimum else ""
+                    raise ValueError(
+                        f"ShapeGrid {prof['name']} projects below 1 px/subcell at marker "
+                        f"{renderer.marker_size}px{suffix}"
+                    )
+                cells = build_shapegrid_frame_cells(
+                    prof,
+                    0,
+                    run_token=0x0001,
+                    state=RunState.RUNNING,
+                    frame_count=1,
+                    dwell_epochs=int(self._campaign_dwell_var.get()),
+                )
+                sync_bits = LabRunEnvelope(
+                    state=RunState.RUNNING,
+                    profile_id=int(prof["profile_id"]),
+                    run_token=0x0001,
+                    frame_index=0,
+                    frame_count=1,
+                    dwell_epochs=int(self._campaign_dwell_var.get()),
+                ).bits()
+                composer.prepare(prof, cells, sync_bits=sync_bits)
             else:
                 return
 
@@ -737,6 +814,33 @@ class MainWindow:
         is_selected = self._campaign_preset_var.get() == "Selected profile"
         self._campaign_candidate_combo.configure(
             state="readonly" if is_selected else "disabled",
+        )
+
+        candidate = self._campaign_candidate_var.get()
+        dwell_str = self._campaign_dwell_var.get()
+        dwell = int(dwell_str) if dwell_str.isdigit() else 3
+        try:
+            frames = int(self._campaign_frames_var.get())
+        except (ValueError, tk.TclError):
+            frames = 256
+
+        target_fps = 20.0
+        if candidate in grid_profiles():
+            target_fps = float(grid_profiles()[candidate].get("target_fps", 20.0))
+        elif candidate in qr_controls():
+            target_fps = float(qr_controls()[candidate].get("target_fps", 20.0))
+        elif candidate in advanced_profiles():
+            target_fps = float(advanced_profile(candidate).get("target_fps", 20.0))
+        elif candidate in shapegrid_profiles():
+            target_fps = float(shapegrid_profile(candidate).get("target_fps", 20.0))
+
+        frame_sec = dwell / target_fps
+        frame_ms = frame_sec * 1000.0
+        run_sec = (frames * dwell) / target_fps
+        eff_fps = target_fps / dwell
+
+        self._campaign_speed_label.set(
+            f"Candidate speed: {frame_sec:.3f}s / frame ({frame_ms:.1f} ms, {eff_fps:.2f} FPS)  •  {run_sec:.2f}s run time"
         )
 
         if ctrl.lifecycle == CampaignLifecycle.IDLE:
