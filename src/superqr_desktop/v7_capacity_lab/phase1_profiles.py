@@ -12,6 +12,7 @@ from superqr_desktop.v7_capacity_lab.protocol_bridge import (
     get_protocol_model,
     get_protocol_prng,
     load_phy_selection_manifest,
+    load_qr_capacity_map_manifest,
 )
 from superqr_desktop.v7_capacity_lab.run_sync import LabRunEnvelope, RunState
 
@@ -20,22 +21,62 @@ class Phase1ManifestError(RuntimeError):
     pass
 
 
+class _QrControlRegistry(dict[str, dict]):
+    """Canonical QR mapping with lab-extension lookup by explicit name.
+
+    Iteration remains canonical so baseline campaigns stay frozen at V27/V40.
+    Extension profiles are available through membership and item lookup for
+    dedicated Phase 0 campaigns.
+    """
+
+    def __init__(self, canonical: dict[str, dict], extensions: dict[str, dict]):
+        super().__init__(canonical)
+        self._extensions = extensions
+
+    def __contains__(self, key: object) -> bool:
+        return super().__contains__(key) or key in self._extensions
+
+    def __getitem__(self, key: str) -> dict:
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            return self._extensions[key]
+
+    def get(self, key: str, default=None):
+        if super().__contains__(key):
+            return super().get(key, default)
+        return self._extensions.get(key, default)
+
+
 def grid_profiles() -> dict[str, dict]:
     manifest = load_phy_selection_manifest()
     return {entry["name"]: entry for entry in manifest["grid_profiles"]}
 
 
-def qr_controls() -> dict[str, dict]:
+def qr_capacity_map_controls() -> dict[str, dict]:
+    manifest = load_qr_capacity_map_manifest()
+    return {entry["name"]: entry for entry in manifest["profiles"]}
+
+
+def qr_controls() -> _QrControlRegistry:
     manifest = load_phy_selection_manifest()
-    return {entry["name"]: entry for entry in manifest["qr_controls"]}
+    canonical = {entry["name"]: entry for entry in manifest["qr_controls"]}
+    return _QrControlRegistry(canonical, qr_capacity_map_controls())
 
 
 def profile_id(profile_name: str) -> int:
     names = list(grid_profiles()) + list(qr_controls())
-    try:
+    if profile_name in names:
         return names.index(profile_name)
-    except ValueError as error:
-        raise Phase1ManifestError(f"Unknown profile: {profile_name}") from error
+    extension = qr_capacity_map_controls().get(profile_name)
+    if extension is not None:
+        profile_id_value = int(extension["profile_id"])
+        if profile_id_value < len(names):
+            raise Phase1ManifestError(
+                f"QR capacity-map profile id collides with canonical profiles: {profile_name}"
+            )
+        return profile_id_value
+    raise Phase1ManifestError(f"Unknown profile: {profile_name}")
 
 
 def build_run_envelope(
@@ -150,10 +191,19 @@ def build_qr_matrix(control: dict, frame_index: int, **payload_options) -> tuple
     return matrix
 
 
+def _validate_qr_control(control: dict) -> None:
+    payload = build_qr_control_payload(control, 0)
+    expected = control["frame_zero"]
+    if hashlib.sha256(payload).hexdigest() != expected["sha256"]:
+        raise Phase1ManifestError(f"QR payload vector mismatch for {control['name']}")
+    build_qr_matrix(control, 0)
+
+
 def validate_qr_vectors() -> None:
     for control in qr_controls().values():
-        payload = build_qr_control_payload(control, 0)
-        expected = control["frame_zero"]
-        if hashlib.sha256(payload).hexdigest() != expected["sha256"]:
-            raise Phase1ManifestError(f"QR payload vector mismatch for {control['name']}")
-        build_qr_matrix(control, 0)
+        _validate_qr_control(control)
+
+
+def validate_qr_capacity_map_vectors() -> None:
+    for control in qr_capacity_map_controls().values():
+        _validate_qr_control(control)
