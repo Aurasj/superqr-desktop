@@ -23,7 +23,7 @@ from superqr_desktop.v7_capacity_lab.lab_display import LabDisplayController
 class _FramePrefetcher:
     """Bounded symbol-matrix producer that keeps PRNG work off frame transitions."""
 
-    def __init__(self, profile: ColorGrid8Profile, frame_limit: int, depth: int = 6):
+    def __init__(self, profile: ColorGrid8Profile, frame_limit: int, depth: int = 64):
         self.profile = profile
         self.frame_limit = frame_limit
         self.queue: queue.Queue[tuple[int, np.ndarray] | BaseException] = queue.Queue(maxsize=depth)
@@ -112,10 +112,12 @@ def run(profile: ColorGrid8Profile, *, frames: int, display_index: int, fullscre
     max_width = max(1, int(canvas_width * 0.98))
     max_height = max(1, int(canvas_height * 0.98))
 
-    # Start deterministic generation before warm-up. The queue is intentionally
-    # small: six 168x144 uint8 matrices are only ~142 KiB, while removing the
-    # Python PRNG loop from the timing-critical frame transition.
-    prefetch = _FramePrefetcher(profile, frames, depth=6)
+    # A default 256-frame 168x144 campaign is only ~6 MiB as uint8 symbols. Let
+    # finite campaigns prefetch completely while the balanced warm-up is visible,
+    # keeping the Python PRNG thread out of most timing-critical presentation.
+    # Continuous mode stays bounded to ~64 frames (~1.5 MiB at the default grid).
+    prefetch_depth = max(1, frames) if 0 < frames <= 512 else 64
+    prefetch = _FramePrefetcher(profile, frames, depth=prefetch_depth)
 
     try:
         if calibration_seconds > 0:
@@ -124,7 +126,7 @@ def run(profile: ColorGrid8Profile, *, frames: int, display_index: int, fullscre
             )
             print(
                 f"warmup: balanced 8-color board, cell={warmup_geometry.cell_px}px, "
-                f"duration={calibration_seconds:.2f}s"
+                f"duration={calibration_seconds:.2f}s, prefetch_depth={prefetch_depth}"
             )
             deadline = time.perf_counter() + calibration_seconds
             while time.perf_counter() < deadline:
