@@ -1,4 +1,4 @@
-"""Production transfer controller for the validated V40 optical modes."""
+"""Production transfer controller for selectable V40 optical modes."""
 
 from __future__ import annotations
 
@@ -17,15 +17,19 @@ class TransferController:
     MODES = {
         "Best tested — V40-L · 15 FPS": "v40_l_15fps",
         "Faster — V40-L · 20 FPS": "v40_l_20fps",
+        "30 FPS test — V40-L · 30 FPS": "v40_l_30fps",
         "Extra ECC — V40-M · 15 FPS": "v40_m_15fps",
         "Extra ECC faster — V40-M · 20 FPS": "v40_m_20fps",
+        "30 FPS ECC test — V40-M · 30 FPS": "v40_m_30fps",
     }
     DEFAULT_MODE = "Best tested — V40-L · 15 FPS"
     MODE_NOTES = {
         "Best tested — V40-L · 15 FPS": "Recommended • best physical result so far: 255/256 first-pass frames.",
         "Faster — V40-L · 20 FPS": "Higher nominal speed • less temporal headroom; use when the camera holds up.",
+        "30 FPS test — V40-L · 30 FPS": "Experimental • matches the receiver camera target; compare real completion speed and misses.",
         "Extra ECC — V40-M · 15 FPS": "More QR error correction, but less payload per frame than V40-L.",
         "Extra ECC faster — V40-M · 20 FPS": "More QR ECC plus 20 FPS • experimental throughput/robustness tradeoff.",
+        "30 FPS ECC test — V40-M · 30 FPS": "Experimental • stronger QR ECC at 30 FPS for a direct robustness comparison.",
     }
     INTERVAL_PRESETS = V7SenderSession.INTERVAL_PRESETS
 
