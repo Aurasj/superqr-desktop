@@ -21,6 +21,7 @@ dependencies = [
 superqr-desktop = "superqr_desktop.app:main"
 superqr-phy-lab = "superqr_desktop.v7_capacity_lab.phase1_runner:main"
 superqr-phy-camera = "superqr_desktop.v7_capacity_lab.camera_receiver_ui:main"
+superqr-colorgrid8-lab = "superqr_desktop.v7_capacity_lab.colorgrid8_lab_runner:main"
 
 [project.optional-dependencies]
 dev = [
