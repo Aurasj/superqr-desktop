@@ -119,6 +119,36 @@ class LabDisplayController:
     centered on exactly the same monitor point.
     """
 
+    _KEPT_EVENTS = {pygame.QUIT, pygame.KEYDOWN, pygame.USEREVENT}
+    _blocklist: list[int] | None = None
+
+    @classmethod
+    def _build_blocklist(cls) -> list[int]:
+        if cls._blocklist is not None:
+            return cls._blocklist
+        blocked = []
+        for name in dir(pygame):
+            if not name.isupper() or name.startswith("_"):
+                continue
+            val = getattr(pygame, name)
+            if not isinstance(val, int) or val <= 0 or val >= 65536:
+                continue
+            if val in cls._KEPT_EVENTS:
+                continue
+            try:
+                pygame.event.set_blocked([val])
+                blocked.append(val)
+            except (ValueError, TypeError):
+                pass
+        cls._blocklist = blocked
+        return blocked
+
+    @classmethod
+    def _apply_event_filter(cls) -> None:
+        bl = cls._build_blocklist()
+        if bl:
+            pygame.event.set_blocked(bl)
+
     def __init__(self, dwell_epochs: int = 2):
         self.dwell_epochs = dwell_epochs
         self.screen: pygame.Surface | None = None
@@ -134,6 +164,7 @@ class LabDisplayController:
     def detect_displays(self) -> list[dict]:
         if not pygame.display.get_init():
             pygame.display.init()
+            self._apply_event_filter()
         displays = []
         try:
             for idx, (width, height) in enumerate(pygame.display.get_desktop_sizes()):
@@ -179,6 +210,7 @@ class LabDisplayController:
             canvas_w = canvas_h = max(marker_size, canonical_qr_canvas)
 
         self.diag.requested_vsync = True
+        self._apply_event_filter()
         screen = None
         try:
             screen = pygame.display.set_mode((canvas_w, canvas_h), flags, display=display_index, vsync=1)

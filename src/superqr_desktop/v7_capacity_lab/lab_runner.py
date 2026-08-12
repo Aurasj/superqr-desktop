@@ -111,6 +111,7 @@ class LabRunner:
 
         # Display
         pygame.init()
+        LabDisplayController._apply_event_filter()
         self.display = LabDisplayController(dwell_epochs=args.dwell)
         self.display.setup_display(
             display_index=args.display,

@@ -70,6 +70,7 @@ class MainWindow:
 
         # -- back end --
         pygame.init()
+        DisplayController._apply_event_filter()
         self.display = DisplayController(contract)
         self.detected_displays = self.display.detect_displays()
         self.transfer_ctrl = TransferController()
@@ -737,10 +738,7 @@ class MainWindow:
 
             # SDL events (only when main process owns the display)
             if self.display.screen is not None:
-                for _ in range(4):
-                    event = pygame.event.poll()
-                    if event.type == pygame.NOEVENT:
-                        break
+                for event in pygame.event.get():
                     if event.type == pygame.QUIT or (
                         event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
                     ):
@@ -750,6 +748,8 @@ class MainWindow:
             self.root.after(50, self._tick)
         except tk.TclError:
             return
+        except Exception:
+            self.root.after(50, self._tick)
 
     def _drain_campaign_completion(self):
         """Block until the campaign worker finishes (with timeout)."""
@@ -758,6 +758,7 @@ class MainWindow:
             self.campaign_ctrl.poll()
             if self.campaign_ctrl.needs_display_reclaim:
                 self.campaign_ctrl.reclaim_display()
+                self._apply_display()
                 break
             if self.campaign_ctrl.lifecycle == CampaignLifecycle.IDLE:
                 break

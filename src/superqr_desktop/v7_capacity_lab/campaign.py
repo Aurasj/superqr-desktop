@@ -108,10 +108,25 @@ def build_campaign(preset: str, profile: str, dwell: int, frames: int) -> list[R
         names = [profile]
     elif preset == "All canonical profiles":
         names = all_profiles
+    elif preset == "Comprehensive grid+QR sweep":
+        names = all_profiles
     elif preset == "Monochrome density sweep":
         names = [name for name in grid_profiles() if name.startswith("mono_")]
     elif preset == "Full grid dwell sweep":
         return [RunSpec(name, epoch, frames) for epoch in (3, 2) for name in grid_profiles()]
+    elif preset == "V27+V40 speed test":
+        return [
+            RunSpec("qr_v27_l_safe", dwell, frames, target_fps=24.0),
+            RunSpec("qr_v27_l_safe", dwell, frames, target_fps=30.0),
+            RunSpec("qr_v40_l_ceiling", dwell, frames, target_fps=24.0),
+            RunSpec("qr_v40_l_ceiling", dwell, frames, target_fps=30.0),
+        ]
+    elif preset == "Grid density sweep":
+        return [
+            RunSpec("mono_64x50_matched", 2, frames),
+            RunSpec("mono_96x75_medium", 2, frames),
+            RunSpec("mono_128x100_qrlike", 2, frames),
+        ]
     elif preset == "V40 cadence sweep":
         return [
             RunSpec("qr_v40_l_ceiling", dwell, frames, target_fps=fps)
@@ -179,6 +194,7 @@ class Phase1CampaignPresenter:
             self.state = CampaignState.STOPPED
             return
         pygame.init()
+        LabDisplayController._apply_event_filter()
         self._prepare_run(0)
 
     def _prepare_run(self, index: int) -> None:

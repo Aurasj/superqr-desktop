@@ -54,7 +54,10 @@ class CampaignController:
         "All canonical profiles",
         "Monochrome density sweep",
         "Full grid dwell sweep",
+        "V27+V40 speed test",
+        "Grid density sweep",
         "V40 cadence sweep",
+        "Comprehensive grid+QR sweep",
         "QR capacity cadence map",
         "QR ECC focused map",
         "Phase 0 advanced FAST",
@@ -63,7 +66,7 @@ class CampaignController:
         "Phase 0 ShapeGrid selection",
     ]
 
-    DWELL_OPTIONS = [2, 3]
+    DWELL_OPTIONS = [2, 3, 6]
 
     def __init__(self):
         self._preset = "Selected profile"
@@ -149,7 +152,7 @@ class CampaignController:
         self._frames = max(1, min(256, frames))
         self._rebuild_runs()
 
-    def start(self, *, ready_seconds: float = 4.0, done_seconds: float = 2.0) -> bool:
+    def start(self, *, ready_seconds: float = 0.5, done_seconds: float = 0.25) -> bool:
         """Begin a campaign. Returns False if no runs configured.
 
         Experimental composite families run in isolated presenters so the
