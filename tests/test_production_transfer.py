@@ -49,8 +49,10 @@ def test_all_production_modes_reframe_file_and_set_expected_cadence(tmp_path):
         expected = {
             "Best tested — V40-L · 15 FPS": ("v40_l_15fps", "L", 2953, 15.0),
             "Faster — V40-L · 20 FPS": ("v40_l_20fps", "L", 2953, 20.0),
+            "30 FPS test — V40-L · 30 FPS": ("v40_l_30fps", "L", 2953, 30.0),
             "Extra ECC — V40-M · 15 FPS": ("v40_m_15fps", "M", 2331, 15.0),
             "Extra ECC faster — V40-M · 20 FPS": ("v40_m_20fps", "M", 2331, 20.0),
+            "30 FPS ECC test — V40-M · 30 FPS": ("v40_m_30fps", "M", 2331, 30.0),
         }
         for mode, (key, ecc, frame_size, fps) in expected.items():
             controller.set_mode(mode)
