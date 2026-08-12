@@ -29,8 +29,8 @@ class MainWindow:
         self.contract_hash = contract_hash
         self.root = tk.Tk()
         self.root.title("SuperQR")
-        self.root.geometry("590x680")
-        self.root.minsize(560, 620)
+        self.root.geometry("590x720")
+        self.root.minsize(560, 650)
         self.root.configure(bg=styles.BG)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         styles.setup_styles(self.root)
@@ -53,6 +53,8 @@ class MainWindow:
         self._selected_display = tk.StringVar(value=labels[0] if labels else "Display 1")
         self._fullscreen = tk.BooleanVar(value=False)
 
+        self._transfer_mode = tk.StringVar(value=self.transfer_ctrl.mode)
+        self._transfer_mode_note = tk.StringVar(value=self.transfer_ctrl.mode_note)
         self._file_label = tk.StringVar(value="No file selected")
         self._file_meta = tk.StringVar(value="Choose any file: photo, audio, video, archive, document…")
         self._transfer_progress = tk.StringVar(value="Ready")
@@ -103,7 +105,7 @@ class MainWindow:
         ttk.Button(row, text="Apply", command=self._apply_display).pack(side="left", padx=(8, 0))
         ttk.Label(
             display_card,
-            text="Production QR canvas: 1000 px • V40-L: 925 px including quiet zone",
+            text="Production V40 QR canvas: 1000 px • 925 px QR including quiet zone",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(6, 0))
 
@@ -126,13 +128,35 @@ class MainWindow:
 
     def _build_transfer_panel(self) -> None:
         card = styles.card(self._transfer_panel, "SEND FILE")
-        ttk.Label(card, text="V40-L • 15 FPS • physically selected reliable mode", style="Card.TLabel").pack(anchor="w")
+        row = ttk.Frame(card, style="Card.TFrame")
+        row.pack(fill="x")
+        ttk.Label(row, text="Mode", style="Card.TLabel", width=7).pack(side="left")
+        mode_combo = ttk.Combobox(
+            row,
+            textvariable=self._transfer_mode,
+            values=self.transfer_ctrl.mode_options,
+            state="readonly",
+        )
+        mode_combo.pack(side="left", fill="x", expand=True)
+        mode_combo.bind("<<ComboboxSelected>>", self._transfer_mode_changed)
+        ttk.Label(
+            card,
+            textvariable=self._transfer_mode_note,
+            style="Muted.TLabel",
+            wraplength=530,
+        ).pack(anchor="w", pady=(4, 4))
+        ttk.Label(
+            card,
+            text="Android stays on Auto 30 FPS and detects the selected V40 mode automatically.",
+            style="Muted.TLabel",
+            wraplength=530,
+        ).pack(anchor="w", pady=(0, 6))
         ttk.Label(
             card,
             text="Frames repeat automatically in shuffled later passes so missed camera frames can self-heal.",
             style="Muted.TLabel",
             wraplength=530,
-        ).pack(anchor="w", pady=(2, 8))
+        ).pack(anchor="w", pady=(0, 8))
         ttk.Button(card, text="SELECT FILE", command=self._select_file).pack(fill="x")
         ttk.Label(card, textvariable=self._file_label, style="Card.TLabel").pack(anchor="w", pady=(8, 1))
         ttk.Label(card, textvariable=self._file_meta, style="Muted.TLabel", wraplength=530).pack(anchor="w")
@@ -207,6 +231,34 @@ class MainWindow:
 
     # ------------------------------------------------------------- transfer
 
+    def _transfer_mode_changed(self, _event=None) -> None:
+        if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
+            self._stop_transfer()
+        try:
+            self.transfer_ctrl.set_mode(self._transfer_mode.get())
+        except Exception as exc:
+            self._status.set(f"Transfer mode error: {exc}")
+            self._transfer_mode.set(self.transfer_ctrl.mode)
+            return
+        self._transfer_mode_note.set(self.transfer_ctrl.mode_note)
+        self._refresh_transfer_file_details()
+        self._status.set(
+            f"Mode ready • {self.transfer_ctrl.profile.label} • {self.transfer_ctrl.target_fps:.0f} FPS"
+        )
+
+    def _refresh_transfer_file_details(self) -> None:
+        if not self.transfer_ctrl.has_file:
+            return
+        self._file_label.set(self.transfer_ctrl.filename or "Selected file")
+        self._file_meta.set(
+            f"{self._format_bytes(self.transfer_ctrl.file_size)} • {self.transfer_ctrl.mime_type} • "
+            f"{self.transfer_ctrl.total_frames:,} optical frames • CRC {self.transfer_ctrl.file_crc32:08X}"
+        )
+        tested = " • best tested physical mode" if self.transfer_ctrl.mode == self.transfer_ctrl.DEFAULT_MODE else ""
+        self._transfer_progress.set(
+            f"Ready • nominal payload {self.transfer_ctrl.nominal_payload_kib_s:.1f} KiB/s{tested}"
+        )
+
     def _select_file(self) -> None:
         path = filedialog.askopenfilename(title="Select a file to send")
         if not path:
@@ -217,14 +269,7 @@ class MainWindow:
         except Exception as exc:
             messagebox.showerror("SuperQR", str(exc))
             return
-        self._file_label.set(self.transfer_ctrl.filename or os.path.basename(path))
-        self._file_meta.set(
-            f"{self._format_bytes(self.transfer_ctrl.file_size)} • {self.transfer_ctrl.mime_type} • "
-            f"{self.transfer_ctrl.total_frames:,} optical frames • CRC {self.transfer_ctrl.file_crc32:08X}"
-        )
-        self._transfer_progress.set(
-            f"Ready • validated mode ≈42.7 KiB/s physical • nominal payload {self.transfer_ctrl.nominal_payload_kib_s:.1f} KiB/s"
-        )
+        self._refresh_transfer_file_details()
         self._status.set("File prepared. Start RECEIVE on the phone, then START TRANSFER here.")
 
     def _start_transfer(self) -> None:
@@ -247,7 +292,7 @@ class MainWindow:
             self.transfer_ctrl.profile,
         )
         self._transfer_waiting_for_first = True
-        self._transfer_progress.set("Preparing V40-L stream…")
+        self._transfer_progress.set(f"Preparing {self.transfer_ctrl.profile.label} stream…")
         self._status.set("Encoding ahead…")
         self._schedule_transfer_tick(1)
 
@@ -302,7 +347,6 @@ class MainWindow:
         if self.transfer_clock.due(now):
             frame = self.transfer_presenter.pop_ready()
             if frame is None:
-                # Keep the current QR visible; never shorten an optical dwell to catch up.
                 self._schedule_transfer_tick(3)
                 return
             self._present_transfer_frame(frame)
@@ -316,10 +360,10 @@ class MainWindow:
         total = self.transfer_ctrl.total_frames
         self._transfer_progress.set(
             f"Sending • loop {frame.loop_index + 1} • frame {frame.frame_id + 1:,}/{total:,} • "
-            f"{self.transfer_ctrl.TARGET_FPS:.0f} FPS • encoder buffer {self.transfer_presenter.ready_count}"
+            f"{self.transfer_ctrl.target_fps:.0f} FPS • encoder buffer {self.transfer_presenter.ready_count}"
         )
         self._status.set(
-            f"V40-L live • render {self._last_transfer_timing.get('render_ms', 0.0):.1f} ms • "
+            f"{self.transfer_ctrl.profile.label} live • render {self._last_transfer_timing.get('render_ms', 0.0):.1f} ms • "
             "receiver decides completion"
         )
 
@@ -342,7 +386,7 @@ class MainWindow:
             return
         self._lab_changed()
         self.campaign_ctrl.set_display(self._selected_display_index(), self._fullscreen.get(), MARKER_SIZE)
-        self.display.close()  # child process owns SDL during the campaign
+        self.display.close()
         try:
             if self.campaign_ctrl.start():
                 self._lab_progress.set("Starting campaign…")
