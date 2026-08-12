@@ -95,15 +95,19 @@ PROFILES = (
                   is_qr=True, qr_version=40, qr_ecc="L", qr_mask=4, qr_frame_bytes=2953),
     OpticalProfile(3, "v40_m_20fps", "V40-M 20fps", 0, "",
                   is_qr=True, qr_version=40, qr_ecc="M", qr_mask=4, qr_frame_bytes=2331),
+    OpticalProfile(4, "v40_l_30fps", "V40-L 30fps", 0, "",
+                  is_qr=True, qr_version=40, qr_ecc="L", qr_mask=4, qr_frame_bytes=2953),
+    OpticalProfile(5, "v40_m_30fps", "V40-M 30fps", 0, "",
+                  is_qr=True, qr_version=40, qr_ecc="M", qr_mask=4, qr_frame_bytes=2331),
 )
 
 BY_ID = {p.id: p for p in PROFILES}
 BY_KEY = {p.key: p for p in PROFILES}
 BY_LABEL = {p.label: p for p in PROFILES}
 
-# Physical captures currently establish 40x40/4-color as the reliable baseline.
-# Higher-density and 8-color profiles remain selectable experiments until AUTO
-# negotiation/FEC can promote them based on measured receiver quality.
+# Physical captures currently establish V40-L 15 FPS as the reliable baseline.
+# Faster V40 modes remain explicit user-selectable experiments until physical
+# transfer tests prove they should replace the default.
 DEFAULT_PROFILE = BY_KEY["v40_l_15fps"]
 
 
