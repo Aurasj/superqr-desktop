@@ -1,9 +1,4 @@
-"""Clean controller wrapping the V7 streaming sender session.
-
-Transfer presentation is in-process: frames are rendered on the main SDL
-display via the tick loop, matching the original ControlApp approach.
-Campaign presentation remains child-process for timing isolation.
-"""
+"""Production transfer controller for the selected V40-L optical mode."""
 
 from __future__ import annotations
 
@@ -20,18 +15,15 @@ class TransferLifecycle(str, Enum):
 
 class TransferController:
     INTERVAL_PRESETS = V7SenderSession.INTERVAL_PRESETS
+    TARGET_FPS = V7SenderSession.PRODUCTION_FPS
 
     def __init__(self):
         self._session = V7SenderSession()
         self._lifecycle = TransferLifecycle.IDLE
 
-    # -- lifecycle ---------------------------------------------------------
-
     @property
     def lifecycle(self) -> TransferLifecycle:
         return self._lifecycle
-
-    # -- configuration -----------------------------------------------------
 
     def select_file(self, path: str) -> None:
         self._session.prepare_transfer(path)
@@ -39,33 +31,29 @@ class TransferController:
     def set_profile(self, profile: OpticalProfile | int | str) -> None:
         self._session.set_profile(profile)
 
-    def set_interval(self, ms: int) -> None:
+    def set_interval(self, ms: float) -> None:
         self._session.set_interval(ms)
 
-    # -- presentation (in-process) ----------------------------------------
-
     def start_presenting(self) -> bool:
-        """Begin in-process presentation. Caller must own the SDL display."""
-        if self._lifecycle != TransferLifecycle.IDLE:
+        if self._lifecycle != TransferLifecycle.IDLE or not self.has_file:
             return False
-        if not self.has_file:
+        if not self._session.start_transfer():
             return False
-        self._session.start_transfer()
         self._lifecycle = TransferLifecycle.PRESENTING
         return True
 
     def stop_presenting(self) -> None:
-        """Stop in-process presentation and return to IDLE."""
         self._session.stop_transfer()
         self._lifecycle = TransferLifecycle.IDLE
 
-    # -- frame data --------------------------------------------------------
+    def get_frame_symbols(self, frame_idx: int | None = None) -> list[int]:
+        return self._session.get_frame_symbols(frame_idx)
 
-    def get_frame_symbols(self) -> list[int]:
-        return self._session.get_frame_symbols()
+    def get_frame_bytes(self, frame_idx: int | None = None) -> bytes:
+        return self._session.get_frame_bytes(frame_idx)
 
-    def get_frame_bytes(self) -> bytes:
-        return self._session.get_frame_bytes()
+    def note_presented(self, frame_idx: int, loop_index: int) -> None:
+        self._session.note_presented(frame_idx, loop_index)
 
     def advance_frame(self) -> int:
         return self._session.advance_frame()
@@ -78,8 +66,6 @@ class TransferController:
         self._session.stop_transfer()
         return self._session.next_frame()
 
-    # -- read-only state ---------------------------------------------------
-
     @property
     def state(self) -> str:
         return self._session.transfer_state
@@ -89,12 +75,16 @@ class TransferController:
         return self._session.profile
 
     @property
-    def interval_ms(self) -> int:
+    def interval_ms(self) -> float:
         return self._session.interval_ms
 
     @property
     def current_frame_idx(self) -> int:
         return self._session.current_frame_idx
+
+    @property
+    def presentation_loop(self) -> int:
+        return self._session.presentation_loop
 
     @property
     def total_frames(self) -> int:
@@ -123,3 +113,11 @@ class TransferController:
     @property
     def has_file(self) -> bool:
         return self._session.file_path is not None
+
+    @property
+    def nominal_payload_kib_s(self) -> float:
+        return self.profile.payload_size * self.TARGET_FPS / 1024.0
+
+    def close(self) -> None:
+        self.stop_presenting()
+        self._session.close()

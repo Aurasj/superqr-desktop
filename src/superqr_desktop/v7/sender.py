@@ -1,10 +1,18 @@
-"""Streaming SuperQR V7 sender session with selectable optical profiles."""
+"""Production SuperQR V7 sender session.
+
+The production optical mode is V40-L at 15 logical FPS, selected from the
+physical Phase 0 sweep.  The transport stays file-type agnostic: bytes are
+packaged with filename, MIME type, size, and CRC32, then split into independent
+out-of-order V7 frames.
+"""
 
 from __future__ import annotations
 
 import mimetypes
 import os
+import secrets
 import zlib
+from typing import BinaryIO
 
 from superqr_desktop.v7.model import SymbolMatrix
 from superqr_desktop.v7.profiles import DEFAULT_PROFILE, OpticalProfile, get_profile
@@ -12,10 +20,13 @@ from superqr_desktop.v7.transport import build_frame, build_package_prefix, byte
 
 
 class V7SenderSession:
-    INTERVAL_PRESETS = [25, 33, 42, 50, 67, 75, 100, 150, 200]
+    PRODUCTION_FPS = 15.0
+    PRODUCTION_INTERVAL_MS = 1000.0 / PRODUCTION_FPS
+    # Retained for compatibility with older controller callers; production UI
+    # no longer exposes arbitrary cadence knobs.
+    INTERVAL_PRESETS = [PRODUCTION_INTERVAL_MS]
 
     def __init__(self):
-        self._session_counter = 0
         self.transfer_state = "IDLE"
         self.file_path: str | None = None
         self.filename: str | None = None
@@ -27,29 +38,28 @@ class V7SenderSession:
         self.session_id: int | None = None
         self.total_frames = 0
         self.current_frame_idx = 0
-        # 40x40/4 at 100 ms is the current physical measurement baseline.
-        # Faster presets remain explicit capacity-test options; V7.0 telemetry
-        # measures the actual presentation and receiver cadence separately.
-        self.interval_ms = 100
+        self.presentation_loop = 0
+        self.interval_ms = self.PRODUCTION_INTERVAL_MS
         self.profile: OpticalProfile = DEFAULT_PROFILE
+        self._file_handle: BinaryIO | None = None
 
-    def _next_session_id(self) -> int:
-        self._session_counter = (self._session_counter % 0xFFFF) + 1
-        return self._session_counter
+    def _new_session_id(self) -> int:
+        return secrets.randbelow(0xFFFF) + 1
 
     def set_profile(self, profile: OpticalProfile | int | str) -> None:
+        """Compatibility hook for lab/dev callers; production remains DEFAULT_PROFILE."""
         p = get_profile(profile)
         if p == self.profile:
             return
-        was_prepared = self.file_path is not None
         path = self.file_path
         self.profile = p
-        if was_prepared and path is not None:
+        if path is not None:
             self.prepare_transfer(path)
 
     def prepare_transfer(self, file_path: str) -> int:
         if not os.path.isfile(file_path):
             raise ValueError("selected file does not exist")
+        self._close_file_handle()
         filename = os.path.basename(file_path)
         file_size = os.path.getsize(file_path)
         crc = 0
@@ -73,13 +83,12 @@ class V7SenderSession:
         self.file_crc32 = crc
         self.package_prefix = prefix
         self.package_size = package_size
-        self.session_id = self._next_session_id()
+        self.session_id = self._new_session_id()
         self.total_frames = total_frames
         self.current_frame_idx = 0
-
-        # File selection prepares a deterministic carousel but does not claim
-        # that anything is already being shown on the optical display.  The UI
-        # owns the actual START transition and presentation cadence.
+        self.presentation_loop = 0
+        self.interval_ms = self.PRODUCTION_INTERVAL_MS
+        self._file_handle = open(file_path, "rb")
         self.transfer_state = "READY"
         return self.session_id
 
@@ -100,9 +109,12 @@ class V7SenderSession:
         if offset < end:
             file_offset = offset - prefix_len
             remaining = end - offset
-            with open(self.file_path, "rb") as fh:
-                fh.seek(file_offset)
-                chunk = fh.read(remaining)
+            fh = self._file_handle
+            if fh is None:
+                fh = open(self.file_path, "rb")
+                self._file_handle = fh
+            fh.seek(file_offset)
+            chunk = fh.read(remaining)
             if len(chunk) != remaining:
                 raise IOError("file changed or became unreadable during transfer")
             out.extend(chunk)
@@ -123,6 +135,8 @@ class V7SenderSession:
         return bytes_to_symbols(self.get_frame_bytes(frame_idx), self.profile)
 
     def get_current_matrix(self) -> SymbolMatrix:
+        if self.profile.is_qr:
+            raise RuntimeError("production V40-L uses QR rendering, not SymbolMatrix")
         symbols = self.get_frame_symbols()
         g = self.profile.grid
         rows = [symbols[r * g:(r + 1) * g] for r in range(g)]
@@ -133,18 +147,27 @@ class V7SenderSession:
             return False
         self.transfer_state = "SENDING"
         self.current_frame_idx = 0
+        self.presentation_loop = 0
         return True
 
     def stop_transfer(self) -> None:
         if self.transfer_state == "SENDING":
             self.transfer_state = "STOPPED"
 
+    def note_presented(self, frame_idx: int, loop_index: int) -> None:
+        if 0 <= frame_idx < self.total_frames:
+            self.current_frame_idx = frame_idx
+            self.presentation_loop = max(0, loop_index)
+
     def advance_frame(self) -> int:
+        """Legacy sequential navigation used outside the production stream producer."""
         if self.total_frames < 1:
             return 0
-        idx = self.current_frame_idx
-        self.current_frame_idx = (self.current_frame_idx + 1) % self.total_frames
-        return idx
+        self.current_frame_idx += 1
+        if self.current_frame_idx >= self.total_frames:
+            self.current_frame_idx = 0
+            self.presentation_loop += 1
+        return self.current_frame_idx
 
     def prev_frame(self) -> int:
         if self.total_frames and self.transfer_state != "SENDING":
@@ -156,6 +179,17 @@ class V7SenderSession:
             self.current_frame_idx = (self.current_frame_idx + 1) % self.total_frames
         return self.current_frame_idx
 
-    def set_interval(self, ms: int) -> None:
-        if ms in self.INTERVAL_PRESETS:
-            self.interval_ms = ms
+    def set_interval(self, ms: float) -> None:
+        # Production cadence is intentionally fixed to the physically selected mode.
+        if abs(float(ms) - self.PRODUCTION_INTERVAL_MS) < 0.01:
+            self.interval_ms = self.PRODUCTION_INTERVAL_MS
+
+    def close(self) -> None:
+        self._close_file_handle()
+
+    def _close_file_handle(self) -> None:
+        if self._file_handle is not None:
+            try:
+                self._file_handle.close()
+            finally:
+                self._file_handle = None
