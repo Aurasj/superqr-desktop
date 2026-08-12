@@ -49,13 +49,16 @@ def run(profile: ColorGrid8Profile, *, frames: int, display_index: int, fullscre
     pygame.init()
     LabDisplayController._apply_event_filter()
     display = LabDisplayController(dwell_epochs=60.0 / profile.fps)
-    detected = display.detect_displays()
-    selected = next((item for item in detected if item["index"] == display_index), detected[0])
     display.setup_display(display_index=display_index, fullscreen=fullscreen, marker_size=1000)
     renderer = ColorGrid8Renderer()
 
-    max_width = int(selected["width"] * (0.98 if fullscreen else 0.90))
-    max_height = int(selected["height"] * (0.98 if fullscreen else 0.90))
+    # Fit against the real SDL canvas, not the monitor dimensions. This matters in
+    # --windowed mode where LabDisplayController intentionally creates a 1000px canvas.
+    if display.screen is None:
+        raise RuntimeError("ColorGrid8 LAB display was not created")
+    canvas_width, canvas_height = display.screen.get_size()
+    max_width = max(1, int(canvas_width * 0.98))
+    max_height = max(1, int(canvas_height * 0.98))
 
     try:
         if calibration_seconds > 0:
