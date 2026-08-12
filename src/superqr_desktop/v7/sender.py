@@ -1,7 +1,7 @@
 """Production SuperQR V7 sender session.
 
-The production optical mode is V40-L at 15 logical FPS, selected from the
-physical Phase 0 sweep.  The transport stays file-type agnostic: bytes are
+Production transfer remains QR V40 only. The UI can select between the four
+physically tested V40-L/V40-M and 15/20 FPS combinations. File bytes are
 packaged with filename, MIME type, size, and CRC32, then split into independent
 out-of-order V7 frames.
 """
@@ -22,9 +22,13 @@ from superqr_desktop.v7.transport import build_frame, build_package_prefix, byte
 class V7SenderSession:
     PRODUCTION_FPS = 15.0
     PRODUCTION_INTERVAL_MS = 1000.0 / PRODUCTION_FPS
-    # Retained for compatibility with older controller callers; production UI
-    # no longer exposes arbitrary cadence knobs.
-    INTERVAL_PRESETS = [PRODUCTION_INTERVAL_MS]
+    SUPPORTED_PROFILE_FPS = {
+        "v40_l_15fps": 15.0,
+        "v40_m_15fps": 15.0,
+        "v40_l_20fps": 20.0,
+        "v40_m_20fps": 20.0,
+    }
+    INTERVAL_PRESETS = [1000.0 / 15.0, 1000.0 / 20.0]
 
     def __init__(self):
         self.transfer_state = "IDLE"
@@ -39,20 +43,38 @@ class V7SenderSession:
         self.total_frames = 0
         self.current_frame_idx = 0
         self.presentation_loop = 0
-        self.interval_ms = self.PRODUCTION_INTERVAL_MS
         self.profile: OpticalProfile = DEFAULT_PROFILE
+        self.interval_ms = self._interval_for_profile(self.profile)
         self._file_handle: BinaryIO | None = None
 
     def _new_session_id(self) -> int:
         return secrets.randbelow(0xFFFF) + 1
 
+    @classmethod
+    def _fps_for_profile(cls, profile: OpticalProfile) -> float:
+        try:
+            return cls.SUPPORTED_PROFILE_FPS[profile.key]
+        except KeyError as exc:
+            raise ValueError(f"unsupported production transfer profile: {profile.key}") from exc
+
+    @classmethod
+    def _interval_for_profile(cls, profile: OpticalProfile) -> float:
+        return 1000.0 / cls._fps_for_profile(profile)
+
+    @property
+    def target_fps(self) -> float:
+        return self._fps_for_profile(self.profile)
+
     def set_profile(self, profile: OpticalProfile | int | str) -> None:
-        """Compatibility hook for lab/dev callers; production remains DEFAULT_PROFILE."""
         p = get_profile(profile)
+        if not p.is_qr or p.key not in self.SUPPORTED_PROFILE_FPS:
+            raise ValueError("production transfer supports only the validated V40 QR profiles")
         if p == self.profile:
+            self.interval_ms = self._interval_for_profile(p)
             return
         path = self.file_path
         self.profile = p
+        self.interval_ms = self._interval_for_profile(p)
         if path is not None:
             self.prepare_transfer(path)
 
@@ -87,7 +109,7 @@ class V7SenderSession:
         self.total_frames = total_frames
         self.current_frame_idx = 0
         self.presentation_loop = 0
-        self.interval_ms = self.PRODUCTION_INTERVAL_MS
+        self.interval_ms = self._interval_for_profile(self.profile)
         self._file_handle = open(file_path, "rb")
         self.transfer_state = "READY"
         return self.session_id
@@ -136,7 +158,7 @@ class V7SenderSession:
 
     def get_current_matrix(self) -> SymbolMatrix:
         if self.profile.is_qr:
-            raise RuntimeError("production V40-L uses QR rendering, not SymbolMatrix")
+            raise RuntimeError("production V40 transfer uses QR rendering, not SymbolMatrix")
         symbols = self.get_frame_symbols()
         g = self.profile.grid
         rows = [symbols[r * g:(r + 1) * g] for r in range(g)]
@@ -160,7 +182,6 @@ class V7SenderSession:
             self.presentation_loop = max(0, loop_index)
 
     def advance_frame(self) -> int:
-        """Legacy sequential navigation used outside the production stream producer."""
         if self.total_frames < 1:
             return 0
         self.current_frame_idx += 1
@@ -180,9 +201,10 @@ class V7SenderSession:
         return self.current_frame_idx
 
     def set_interval(self, ms: float) -> None:
-        # Production cadence is intentionally fixed to the physically selected mode.
-        if abs(float(ms) - self.PRODUCTION_INTERVAL_MS) < 0.01:
-            self.interval_ms = self.PRODUCTION_INTERVAL_MS
+        expected = self._interval_for_profile(self.profile)
+        if abs(float(ms) - expected) >= 0.01:
+            raise ValueError("production cadence is encoded by the selected V40 mode")
+        self.interval_ms = expected
 
     def close(self) -> None:
         self._close_file_handle()
