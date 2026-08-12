@@ -7,6 +7,7 @@ from superqr_desktop.v7_capacity_lab.colorgrid8_core import (
     build_symbol_frame,
     golden_crc32,
 )
+from superqr_desktop.v7_capacity_lab.colorgrid8_renderer import choose_cell_px
 
 
 def test_default_profile_keeps_200_kib_s_after_lab_overheads() -> None:
@@ -31,3 +32,10 @@ def test_all_sweep_frames_are_valid_3_bit_symbols() -> None:
             assert frame.shape == (rows, cols)
             assert int(frame.min()) >= 0
             assert int(frame.max()) <= 7
+
+
+def test_high_resolution_sender_uses_available_optical_area() -> None:
+    profile = ColorGrid8Profile(168, 144, 30)
+    # 3840x2160 can fit 13 px cells after the defined LAB margins. The old
+    # arbitrary 10 px cap threw away useful camera sampling resolution.
+    assert choose_cell_px(profile, 3840, 2160) == 13
