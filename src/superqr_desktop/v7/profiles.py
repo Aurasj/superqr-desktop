@@ -34,34 +34,50 @@ class OpticalProfile:
     label: str
     grid: int
     palette_name: str
+    is_qr: bool = False
+    qr_version: int = 0
+    qr_ecc: str = "L"
+    qr_mask: int = 4
+    qr_frame_bytes: int = 0
+
+    _bits_per_cell: int = 0
+    _color_count: int = 0
+    _cell_count: int = 0
+    _frame_size: int = 0
+    _payload_size: int = 0
+    _cell_width: float = 0.0
+    _cell_height: float = 0.0
+
+    def __post_init__(self):
+        bp = 2 if self.palette_name == "v6_reference_4" else 3
+        cc = 1 << bp
+        cnt = self.grid * self.grid
+        fs = self.qr_frame_bytes if self.is_qr else (cnt * bp) // 8
+        ps = fs - 20
+        cw = (PAYLOAD_BBOX[2] - PAYLOAD_BBOX[0]) / self.grid if self.grid > 0 else 0.0
+        ch = (PAYLOAD_BBOX[3] - PAYLOAD_BBOX[1]) / self.grid if self.grid > 0 else 0.0
+        object.__setattr__(self, "_bits_per_cell", bp)
+        object.__setattr__(self, "_color_count", cc)
+        object.__setattr__(self, "_cell_count", cnt)
+        object.__setattr__(self, "_frame_size", fs)
+        object.__setattr__(self, "_payload_size", ps)
+        object.__setattr__(self, "_cell_width", cw)
+        object.__setattr__(self, "_cell_height", ch)
 
     @property
-    def bits_per_cell(self) -> int:
-        return 2 if self.palette_name == "v6_reference_4" else 3
-
+    def bits_per_cell(self) -> int: return self._bits_per_cell
     @property
-    def color_count(self) -> int:
-        return 1 << self.bits_per_cell
-
+    def color_count(self) -> int: return self._color_count
     @property
-    def cell_count(self) -> int:
-        return self.grid * self.grid
-
+    def cell_count(self) -> int: return self._cell_count
     @property
-    def frame_size(self) -> int:
-        return (self.cell_count * self.bits_per_cell) // 8
-
+    def frame_size(self) -> int: return self._frame_size
     @property
-    def payload_size(self) -> int:
-        return self.frame_size - 20
-
+    def payload_size(self) -> int: return self._payload_size
     @property
-    def cell_width(self) -> float:
-        return (PAYLOAD_BBOX[2] - PAYLOAD_BBOX[0]) / self.grid
-
+    def cell_width(self) -> float: return self._cell_width
     @property
-    def cell_height(self) -> float:
-        return (PAYLOAD_BBOX[3] - PAYLOAD_BBOX[1]) / self.grid
+    def cell_height(self) -> float: return self._cell_height
 
     def raw_kib_s(self, interval_ms: int) -> float:
         return self.frame_size * (1000.0 / interval_ms) / 1024.0
@@ -71,16 +87,14 @@ class OpticalProfile:
 
 
 PROFILES = (
-    OpticalProfile(0, "safe_40_4", "40×40 • 4 colors • Safe", 40, "v6_reference_4"),
-    OpticalProfile(1, "balanced_48_4", "48×48 • 4 colors • Balanced", 48, "v6_reference_4"),
-    OpticalProfile(2, "fast_56_4", "56×56 • 4 colors • Fast", 56, "v6_reference_4"),
-    OpticalProfile(3, "turbo_64_4", "64×64 • 4 colors • Turbo", 64, "v6_reference_4"),
-    OpticalProfile(4, "stress_72_4", "72×72 • 4 colors • Stress", 72, "v6_reference_4"),
-    OpticalProfile(5, "stress_80_4", "80×80 • 4 colors • Stress+", 80, "v6_reference_4"),
-    OpticalProfile(6, "color_40_8", "40×40 • 8 colors • Color", 40, "candidate_8_a"),
-    OpticalProfile(7, "color_48_8", "48×48 • 8 colors • Color Fast", 48, "candidate_8_a"),
-    OpticalProfile(8, "color_56_8", "56×56 • 8 colors • Color Turbo", 56, "candidate_8_a"),
-    OpticalProfile(9, "color_64_8", "64×64 • 8 colors • Color Stress", 64, "candidate_8_a"),
+    OpticalProfile(0, "v40_l_15fps", "V40-L 15fps", 0, "",
+                  is_qr=True, qr_version=40, qr_ecc="L", qr_mask=4, qr_frame_bytes=2953),
+    OpticalProfile(1, "v40_m_15fps", "V40-M 15fps", 0, "",
+                  is_qr=True, qr_version=40, qr_ecc="M", qr_mask=4, qr_frame_bytes=2331),
+    OpticalProfile(2, "v40_l_20fps", "V40-L 20fps", 0, "",
+                  is_qr=True, qr_version=40, qr_ecc="L", qr_mask=4, qr_frame_bytes=2953),
+    OpticalProfile(3, "v40_m_20fps", "V40-M 20fps", 0, "",
+                  is_qr=True, qr_version=40, qr_ecc="M", qr_mask=4, qr_frame_bytes=2331),
 )
 
 BY_ID = {p.id: p for p in PROFILES}
@@ -90,7 +104,7 @@ BY_LABEL = {p.label: p for p in PROFILES}
 # Physical captures currently establish 40x40/4-color as the reliable baseline.
 # Higher-density and 8-color profiles remain selectable experiments until AUTO
 # negotiation/FEC can promote them based on measured receiver quality.
-DEFAULT_PROFILE = BY_KEY["safe_40_4"]
+DEFAULT_PROFILE = BY_KEY["v40_l_15fps"]
 
 
 def get_profile(value: int | str | OpticalProfile) -> OpticalProfile:

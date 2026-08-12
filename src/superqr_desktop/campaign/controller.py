@@ -55,6 +55,7 @@ class CampaignController:
         "Monochrome density sweep",
         "Full grid dwell sweep",
         "V40 sweep",
+        "V40 family sweep",
         "V27+V40 speed test",
         "Grid density sweep",
         "V40 cadence sweep",

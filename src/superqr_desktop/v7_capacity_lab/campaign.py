@@ -107,6 +107,12 @@ def build_campaign(preset: str, profile: str, dwell: float, frames: int) -> list
     if preset == "V40 sweep":
         return [RunSpec("qr_v40_l_ceiling", round(60.0 / fps, 3), frames, target_fps=fps)
                 for fps in (30.0, 24.0, 20.0, 15.0, 12.0, 10.0)]
+    if preset == "V40 family sweep":
+        return [
+            RunSpec(p, round(60.0 / fps, 3), frames, target_fps=fps)
+            for p in ("qr_v40_l_ceiling", "qr_v40_m_ecc", "qr_v36_l_map")
+            for fps in (20.0, 15.0, 12.0)
+        ]
     if preset == "Selected profile":
         names = [profile]
     elif preset == "All canonical profiles":
@@ -324,6 +330,7 @@ class Phase1CampaignPresenter:
                         self._build_index = idx + 1
                     if self._build_index >= self.spec.frame_count:
                         self._qr_control = None
+                        self.display.reset_measurement()
                         self.state = CampaignState.READY
                         self.state_started = now
                         self._render(RunState.READY)

@@ -350,6 +350,11 @@ class LabDisplayController:
         self.diag.estimated_skipped_refreshes = 0
         self.diag._recent_intervals.clear()
         self.diag._all_intervals.clear()
+        self.diag.vsync_verified = False
+        self._verification_intervals.clear()
+        if self.diag.timing_mode == TimingMode.FALLBACK_TIMER_MODE and self.diag.driver_vsync_reported:
+            self.diag.timing_mode = TimingMode.VSYNC_MODE
+            self.diag.timing_note = "re-measuring VSync after PREPARING"
         self.dwell = DwellState(
             dwell_epochs=self.dwell_epochs,
             present_refresh_hz=self.diag.reported_refresh_hz or REFERENCE_REFRESH_HZ,

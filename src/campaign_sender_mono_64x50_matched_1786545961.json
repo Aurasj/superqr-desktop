@@ -1,0 +1,54 @@
+{
+  "schema": "superqr-phy-lab-sender-v3",
+  "production_wire_frozen": false,
+  "presentation": {
+    "display_index": 0,
+    "fullscreen": false,
+    "marker_size_px": 1000,
+    "ready_seconds": 1.0,
+    "done_seconds": 0.25,
+    "qr_layouts": {
+      "qr_v27_l_safe": {
+        "canvas_size_px": 1000,
+        "total_modules": 133,
+        "integer_module_scale_px": 7,
+        "rendered_size_px": 931,
+        "margin_px": 34
+      },
+      "qr_v40_l_ceiling": {
+        "canvas_size_px": 1000,
+        "total_modules": 185,
+        "integer_module_scale_px": 5,
+        "rendered_size_px": 925,
+        "margin_px": 37
+      }
+    }
+  },
+  "state": "STOPPED",
+  "runs_completed": 0,
+  "runs_total": 1,
+  "runs": [],
+  "current": {
+    "state": "STOPPED",
+    "profile": "mono_64x50_matched",
+    "dwell_epochs": 3.0,
+    "run_token": 10934,
+    "run_number": 1,
+    "run_total": 1,
+    "frame_index": 0,
+    "frame_count": 256,
+    "ready_remaining_s": 0.0,
+    "present_count": 0,
+    "logical_fps": 0.0,
+    "present_fps": 0.0,
+    "late_presents": 0,
+    "render_prepare_ms": 7.37,
+    "timing_mode": "VSYNC_VERIFYING",
+    "vsync_verified": false,
+    "present_interval_ms": 0.0,
+    "timing_note": "driver reported VSync; measuring present cadence",
+    "error": null
+  },
+  "runtime_isolation": "process",
+  "presenter_process_id": 7896
+}

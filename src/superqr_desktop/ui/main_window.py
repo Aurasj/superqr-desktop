@@ -465,10 +465,17 @@ class MainWindow:
         """Render one transfer frame on the existing SDL display."""
         if not self.transfer_ctrl.has_file or self.display.screen is None:
             return
-        symbols = self.transfer_ctrl.get_frame_symbols()
-        timing = self.transfer_presenter.render_frame(
-            symbols, self.display.marker_size, self.transfer_ctrl.profile,
-        )
+        p = self.transfer_ctrl.profile
+        if p.is_qr:
+            frame_bytes = self.transfer_ctrl.get_frame_bytes()
+            timing = self.transfer_presenter.render_qr_bytes(
+                frame_bytes, self.display.marker_size, p,
+            )
+        else:
+            symbols = self.transfer_ctrl.get_frame_symbols()
+            timing = self.transfer_presenter.render_frame(
+                symbols, self.display.marker_size, p,
+            )
         self.diag.record_present(
             self.transfer_ctrl.current_frame_idx,
             self.transfer_ctrl.interval_ms,
@@ -793,9 +800,14 @@ class MainWindow:
     def _update_transfer_ui(self):
         ctrl = self.transfer_ctrl
         p = ctrl.profile
-        self._lbl_transfer_detail.config(
-            text=f"{p.frame_size} B/frame  •  cell {p.cell_width:.1f}×{p.cell_height:.1f}px @ 1000",
-        )
+        if p.is_qr:
+            self._lbl_transfer_detail.config(
+                text=f"QR V{p.qr_version}-{p.qr_ecc}  •  {p.frame_size} B/frame  •  {p.payload_size} B payload",
+            )
+        else:
+            self._lbl_transfer_detail.config(
+                text=f"{p.frame_size} B/frame  •  cell {p.cell_width:.1f}×{p.cell_height:.1f}px @ 1000",
+            )
         if ctrl.has_file:
             self._transfer_file_label.set(
                 f"{ctrl.filename}  •  {ctrl.mime_type}",

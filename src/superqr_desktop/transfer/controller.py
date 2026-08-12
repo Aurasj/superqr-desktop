@@ -64,6 +64,9 @@ class TransferController:
     def get_frame_symbols(self) -> list[int]:
         return self._session.get_frame_symbols()
 
+    def get_frame_bytes(self) -> bytes:
+        return self._session.get_frame_bytes()
+
     def advance_frame(self) -> int:
         return self._session.advance_frame()
 
