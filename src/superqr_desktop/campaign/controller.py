@@ -27,7 +27,7 @@ from superqr_desktop.v7_capacity_lab.campaign import (
     RunSpec,
     build_campaign,
 )
-from superqr_desktop.v7_capacity_lab.phase1_profiles import grid_profiles, qr_controls
+from superqr_desktop.v7_capacity_lab.phase1_profiles import CHROMA_QR_NAME, grid_profiles, qr_controls
 from superqr_desktop.v7_capacity_lab.shapegrid import (
     default_shapegrid_profile_name,
     shapegrid_profile,
@@ -59,6 +59,7 @@ class CampaignController:
         "V27+V40 speed test",
         "Grid density sweep",
         "V40 cadence sweep",
+        "Phase 0 ChromaQR V40 sweep",
         "Comprehensive grid+QR sweep",
         "QR capacity cadence map",
         "QR ECC focused map",
@@ -90,7 +91,6 @@ class CampaignController:
 
     @property
     def needs_display_reclaim(self) -> bool:
-        """True exactly once when the UI must reopen the main SDL display."""
         return self._lifecycle in (CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED) and not self._display_reclaimed
 
     def _transition(self, target: CampaignLifecycle) -> None:
@@ -115,12 +115,7 @@ class CampaignController:
 
     @property
     def available_profiles(self) -> list[str]:
-        return (
-            list(grid_profiles())
-            + list(qr_controls())
-            + list(advanced_profiles())
-            + list(shapegrid_profiles())
-        )
+        return list(grid_profiles()) + list(qr_controls()) + list(advanced_profiles()) + list(shapegrid_profiles())
 
     @property
     def runs(self) -> list[RunSpec]:
@@ -155,11 +150,6 @@ class CampaignController:
         self._rebuild_runs()
 
     def start(self, *, ready_seconds: float = 1.0, done_seconds: float = 0.25) -> bool:
-        """Begin a campaign. Returns False if no runs configured.
-
-        Experimental composite families run in isolated presenters so the
-        canonical single-lane campaign engine remains behaviorally frozen.
-        """
         if self._lifecycle != CampaignLifecycle.IDLE:
             return False
         if not self._runs:
@@ -233,9 +223,7 @@ class CampaignController:
         if self._lifecycle == CampaignLifecycle.STARTING:
             if not self._worker.is_alive():
                 self._transition(CampaignLifecycle.FAILED)
-            elif snapshot is not None and snapshot.state in (
-                CampaignState.READY, CampaignState.RUNNING,
-            ):
+            elif snapshot is not None and snapshot.state in (CampaignState.READY, CampaignState.RUNNING):
                 self._transition(CampaignLifecycle.RUNNING)
             return
         if self._lifecycle == CampaignLifecycle.RUNNING:
@@ -269,6 +257,12 @@ class CampaignController:
         return RunSpec(name, self._dwell, self._frames, target_fps=fps)
 
     def _rebuild_runs(self) -> None:
+        if self._preset == "Phase 0 ChromaQR V40 sweep":
+            self._runs = [
+                RunSpec(CHROMA_QR_NAME, round(60.0 / fps, 3), self._frames, target_fps=fps)
+                for fps in (15.0, 20.0, 24.0, 30.0)
+            ]
+            return
         if self._preset == "QR capacity cadence map":
             self._runs = build_qr_capacity_map_runs(self._dwell, self._frames)
             return
@@ -300,6 +294,4 @@ class CampaignController:
         if self._preset == "Selected profile" and self._profile in advanced_profiles():
             self._runs = [self._advanced_run(self._profile)]
             return
-        self._runs = build_campaign(
-            self._preset, self._profile, self._dwell, self._frames,
-        )
+        self._runs = build_campaign(self._preset, self._profile, self._dwell, self._frames)
