@@ -24,6 +24,16 @@ class Phase1ManifestError(RuntimeError):
 
 ECC_IDS = {"L": 1, "M": 2, "Q": 3, "H": 4}
 
+# LAB ONLY. ChromaQR keeps the ordinary V40-L luminance pattern intact while
+# adding one independent chroma bit per QR module. 0/1 remain white/black;
+# 2/3 are light-yellow/dark-blue and are rendered by LabRenderer.
+CHROMA_QR_NAME = "chromaqr_v40_l_by1"
+CHROMA_QR_MAGIC = b"CQ4B"
+CHROMA_QR_VARIANT = 1
+CHROMA_QR_BITS_PER_MODULE = 1
+CHROMA_QR_MODULE_COUNT = 177
+CHROMA_QR_SEED_SALT = 0xC04A7A11
+
 
 class _QrControlRegistry(dict[str, dict]):
     """Canonical QR mapping with lab-extension lookup by explicit name.
@@ -67,9 +77,27 @@ def qr_ecc_map_controls() -> dict[str, dict]:
     return {entry["name"]: entry for entry in manifest["profiles"]}
 
 
+def chromaqr_controls() -> dict[str, dict]:
+    """Return the isolated ChromaQR lab overlay built on canonical V40-L."""
+    manifest = load_phy_selection_manifest()
+    try:
+        base = next(entry for entry in manifest["qr_controls"] if entry["name"] == "qr_v40_l_ceiling")
+    except StopIteration as error:
+        raise Phase1ManifestError("canonical V40-L control is required for ChromaQR") from error
+    control = dict(base)
+    control.update(
+        name=CHROMA_QR_NAME,
+        wire_profile_name=base["name"],
+        chroma_overlay="BY1",
+        chroma_bits_per_module=CHROMA_QR_BITS_PER_MODULE,
+        chroma_module_count=CHROMA_QR_MODULE_COUNT,
+    )
+    return {CHROMA_QR_NAME: control}
+
+
 def qr_extension_controls() -> dict[str, dict]:
     extensions: dict[str, dict] = {}
-    for source in (qr_capacity_map_controls(), qr_ecc_map_controls()):
+    for source in (qr_capacity_map_controls(), qr_ecc_map_controls(), chromaqr_controls()):
         overlap = set(extensions).intersection(source)
         if overlap:
             raise Phase1ManifestError(f"duplicate QR extension profiles: {sorted(overlap)}")
@@ -93,6 +121,9 @@ def profile_id(profile_name: str) -> int:
         return names.index(profile_name)
     extension = qr_extension_controls().get(profile_name)
     if extension is not None:
+        wire_name = extension.get("wire_profile_name")
+        if wire_name is not None:
+            return profile_id(str(wire_name))
         profile_id_value = int(extension["profile_id"])
         if profile_id_value < len(names):
             raise Phase1ManifestError(
@@ -177,6 +208,30 @@ def qr_ecc_id(control: dict) -> int:
     return declared
 
 
+def chromaqr_seed(frame_index: int) -> int:
+    """Cross-platform spatial color PRNG seed. Independent of run timing/token."""
+    base_seed = int(load_phy_selection_manifest()["seed"])
+    value = (base_seed ^ ((int(frame_index) * 0x9E3779B1) & 0xFFFFFFFF) ^ CHROMA_QR_SEED_SALT) & 0xFFFFFFFF
+    return value or 1
+
+
+def _apply_chromaqr_overlay(matrix: tuple[bytes, ...], frame_index: int) -> tuple[bytes, ...]:
+    prng_mod = get_protocol_prng()
+    prng = prng_mod.Xorshift32(chromaqr_seed(frame_index))
+    out: list[bytes] = []
+    for row in matrix:
+        colored = bytearray(len(row))
+        for index, base_dark in enumerate(row):
+            chroma_bit = prng.next() & 1
+            if chroma_bit:
+                # 2 = light/yellow, 3 = dark/blue. Luminance class is preserved.
+                colored[index] = 3 if base_dark else 2
+            else:
+                colored[index] = 1 if base_dark else 0
+        out.append(bytes(colored))
+    return tuple(out)
+
+
 def build_qr_control_payload(
     control: dict,
     frame_index: int,
@@ -195,13 +250,23 @@ def build_qr_control_payload(
     struct.pack_into("<I", body, 6, frame_index)
     struct.pack_into("<I", body, 10, seed)
     struct.pack_into("<H", body, 14, frame_bytes)
+    wire_profile = str(control.get("wire_profile_name", control["name"]))
     body[16:26] = build_run_envelope(
-        control["name"], run_token, frame_index, frame_count, dwell_epochs, state,
+        wire_profile, run_token, frame_index, frame_count, dwell_epochs, state,
     ).encode()
     prng_mod = get_protocol_prng()
     prng = prng_mod.Xorshift32((seed ^ int(control["version"]) ^ frame_index) or 1)
     for index in range(26, len(body)):
         body[index] = prng.next() & 0xFF
+
+    if control.get("chroma_overlay") == "BY1" and state == RunState.RUNNING:
+        # Self-identifying lab marker. The ordinary QR CRC covers this marker.
+        body[26:30] = CHROMA_QR_MAGIC
+        body[30] = CHROMA_QR_VARIANT
+        body[31] = CHROMA_QR_BITS_PER_MODULE
+        struct.pack_into("<H", body, 32, CHROMA_QR_MODULE_COUNT)
+        body[34] = max(1, min(255, int(round(60.0 / float(dwell_epochs)))))
+
     return bytes(body) + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
 
 
@@ -224,6 +289,8 @@ def build_qr_matrix(control: dict, frame_index: int, **payload_options) -> tuple
         raise Phase1ManifestError(
             f"QR matrix size mismatch: expected {expected_modules}, got {len(matrix)}"
         )
+    if control.get("chroma_overlay") == "BY1" and payload_options.get("state", RunState.RUNNING) == RunState.RUNNING:
+        matrix = _apply_chromaqr_overlay(matrix, frame_index)
     return matrix
 
 
