@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 from superqr_desktop.presentation.transfer import _QrFrameProducer
+from superqr_desktop.transfer.controller import TransferController
 from superqr_desktop.v7.profiles import DEFAULT_PROFILE
 from superqr_desktop.v7.sender import V7SenderSession
 from superqr_desktop.v7.transport import parse_frame, parse_package
@@ -37,6 +38,35 @@ def test_v40_l_sender_round_trips_arbitrary_binary_file(tmp_path):
         assert package.file_data == source
     finally:
         sender.close()
+
+
+def test_all_production_modes_reframe_file_and_set_expected_cadence(tmp_path):
+    path = tmp_path / "payload.bin"
+    path.write_bytes(bytes(range(251)) * 80)
+    controller = TransferController()
+    try:
+        controller.select_file(str(path))
+        expected = {
+            "Best tested — V40-L · 15 FPS": ("v40_l_15fps", "L", 2953, 15.0),
+            "Faster — V40-L · 20 FPS": ("v40_l_20fps", "L", 2953, 20.0),
+            "Extra ECC — V40-M · 15 FPS": ("v40_m_15fps", "M", 2331, 15.0),
+            "Extra ECC faster — V40-M · 20 FPS": ("v40_m_20fps", "M", 2331, 20.0),
+        }
+        for mode, (key, ecc, frame_size, fps) in expected.items():
+            controller.set_mode(mode)
+            assert controller.mode == mode
+            assert controller.profile.key == key
+            assert controller.profile.qr_version == 40
+            assert controller.profile.qr_ecc == ecc
+            assert controller.profile.frame_size == frame_size
+            assert math.isclose(controller.target_fps, fps)
+            assert math.isclose(controller.interval_ms, 1000.0 / fps)
+            raw = controller.get_frame_bytes(0)
+            assert len(raw) == frame_size
+            parsed = parse_frame(raw, controller.profile)
+            assert parsed.profile_id == controller.profile.id
+    finally:
+        controller.close()
 
 
 def test_later_carousels_are_bijective_and_change_frame_phase():
