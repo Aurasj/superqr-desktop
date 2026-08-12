@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import segno
+
 from superqr_desktop.v7_capacity_lab.phase1_profiles import (
     CHROMA_QR_MAGIC,
     CHROMA_QR_MODULE_COUNT,
@@ -14,10 +16,17 @@ from superqr_desktop.v7_capacity_lab.run_sync import RunState
 
 def test_chromaqr_overlay_preserves_binary_qr_and_adds_color_bit():
     chroma = qr_controls()[CHROMA_QR_NAME]
-    base = qr_controls()["qr_v40_l_ceiling"]
     kwargs = dict(run_token=1234, state=RunState.RUNNING, frame_count=256, dwell_epochs=3.0)
-
-    base_matrix = build_qr_matrix(base, 17, **kwargs)
+    payload = build_qr_control_payload(chroma, 17, **kwargs)
+    raw_qr = segno.make_qr(
+        payload,
+        version=int(chroma["version"]),
+        error=chroma["error_correction"],
+        mask=int(chroma["mask_pattern"]),
+        mode="byte",
+        boost_error=False,
+    )
+    base_matrix = tuple(bytes(row) for row in raw_qr.matrix)
     color_matrix = build_qr_matrix(chroma, 17, **kwargs)
 
     assert len(color_matrix) == CHROMA_QR_MODULE_COUNT
@@ -26,7 +35,7 @@ def test_chromaqr_overlay_preserves_binary_qr_and_adds_color_bit():
 
     for base_row, color_row in zip(base_matrix, color_matrix):
         for base_value, color_value in zip(base_row, color_row):
-            # 1/3 are dark; 0/2 are light. The standard QR bit is unchanged.
+            # 1/3 are dark; 0/2 are light. Chroma does not alter the QR bit.
             assert bool(base_value) == (color_value in (1, 3))
 
 
