@@ -6,6 +6,8 @@ PHASE 1 TEST campaigns run in a child process for timing isolation.
 
 from __future__ import annotations
 
+import json
+import os
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -86,7 +88,7 @@ class MainWindow:
         # -- display vars --
         labels = [d["label"] for d in self.detected_displays]
         self._selected_display_str = tk.StringVar(value=labels[0] if labels else "Display 1")
-        self._selected_size_var = tk.IntVar(value=800)
+        self._selected_size_var = tk.IntVar(value=1000)
         self._window_mode_var = tk.StringVar(value="windowed")
 
         # -- transfer vars --
@@ -491,7 +493,7 @@ class MainWindow:
                 _frame_index, matrix = sequence.next_frame()
                 envelope = build_run_envelope(
                     candidate, 0x0001, 0, 1,
-                    int(self._campaign_dwell_var.get()),
+                    float(self._campaign_dwell_var.get()),
                 )
                 renderer.prepare_logical_frame(
                     matrix,
@@ -507,7 +509,7 @@ class MainWindow:
                 quiet = int(control["quiet_zone_modules"])
                 matrix = build_qr_matrix(
                     control, 0, run_token=0x0001, frame_count=1,
-                    dwell_epochs=int(self._campaign_dwell_var.get()),
+                    dwell_epochs=float(self._campaign_dwell_var.get()),
                 )
                 native = renderer.build_qr_native_surface(matrix, quiet)
                 renderer.prepare_qr_native_surface(native)
@@ -525,7 +527,7 @@ class MainWindow:
                             0,
                             run_token=0x0001,
                             frame_count=1,
-                            dwell_epochs=int(self._campaign_dwell_var.get()),
+                            dwell_epochs=float(self._campaign_dwell_var.get()),
                         )
                         native = renderer.build_qr_native_surface(matrix, quiet)
                         lane_surfaces[lane_id] = native
@@ -536,7 +538,7 @@ class MainWindow:
                         0x0001,
                         0,
                         1,
-                        int(self._campaign_dwell_var.get()),
+                        float(self._campaign_dwell_var.get()),
                     ).bits()
                 composer.prepare(prof, 0, lane_surfaces, sync_bits=sync_bits)
             elif candidate in shapegrid_profiles():
@@ -555,7 +557,7 @@ class MainWindow:
                     run_token=0x0001,
                     state=RunState.RUNNING,
                     frame_count=1,
-                    dwell_epochs=int(self._campaign_dwell_var.get()),
+                    dwell_epochs=float(self._campaign_dwell_var.get()),
                 )
                 sync_bits = LabRunEnvelope(
                     state=RunState.RUNNING,
@@ -563,7 +565,7 @@ class MainWindow:
                     run_token=0x0001,
                     frame_index=0,
                     frame_count=1,
-                    dwell_epochs=int(self._campaign_dwell_var.get()),
+                    dwell_epochs=float(self._campaign_dwell_var.get()),
                 ).bits()
                 composer.prepare(prof, cells, sync_bits=sync_bits)
             else:
@@ -688,7 +690,7 @@ class MainWindow:
 
     def _on_campaign_dwell_changed(self, _event=None):
         try:
-            self.campaign_ctrl.set_dwell(int(self._campaign_dwell_var.get()))
+            self.campaign_ctrl.set_dwell(float(self._campaign_dwell_var.get()))
             self._update_campaign_ui()
         except ValueError:
             pass
@@ -705,8 +707,10 @@ class MainWindow:
             if self.campaign_ctrl.needs_display_reclaim:
                 snapshot = self.campaign_ctrl.reclaim_display()
                 self._apply_display()
-                if snapshot is not None and snapshot.error:
-                    self._lbl_err.config(text=f"Campaign error: {snapshot.error}")
+                if snapshot is not None:
+                    if snapshot.error:
+                        self._lbl_err.config(text=f"Campaign error: {snapshot.error}")
+                    self._export_campaign_results()
                 self._update_campaign_ui()
                 self._update_status()
 
@@ -766,6 +770,23 @@ class MainWindow:
             self.root.update()
 
     # ------------------------------------------------------------------
+    # Campaign export
+    # ------------------------------------------------------------------
+
+    def _export_campaign_results(self):
+        export = self.campaign_ctrl.last_export_payload()
+        if export is None:
+            return
+        campaign_id = export.get("current", {}).get("profile", "unknown")
+        path = os.path.join(os.path.dirname(__file__), "..", "..",
+            f"campaign_sender_{campaign_id}_{int(time.time())}.json")
+        try:
+            with open(path, "w") as f:
+                json.dump(export, f, indent=2)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # UI updates
     # ------------------------------------------------------------------
 
@@ -819,29 +840,34 @@ class MainWindow:
 
         candidate = self._campaign_candidate_var.get()
         dwell_str = self._campaign_dwell_var.get()
-        dwell = int(dwell_str) if dwell_str.isdigit() else 3
+        try:
+            dwell = float(dwell_str)
+        except (ValueError, tk.TclError):
+            dwell = 3.0
         try:
             frames = int(self._campaign_frames_var.get())
         except (ValueError, tk.TclError):
             frames = 256
 
-        target_fps = 20.0
-        if candidate in grid_profiles():
-            target_fps = float(grid_profiles()[candidate].get("target_fps", 20.0))
-        elif candidate in qr_controls():
-            target_fps = float(qr_controls()[candidate].get("target_fps", 20.0))
-        elif candidate in advanced_profiles():
-            target_fps = float(advanced_profile(candidate).get("target_fps", 20.0))
-        elif candidate in shapegrid_profiles():
-            target_fps = float(shapegrid_profile(candidate).get("target_fps", 20.0))
+        # VSYNC dwell-based effective FPS (60 Hz canonical reference)
+        eff_fps = 60.0 / dwell if dwell > 0 else 0.0
+        frame_ms = dwell * 1000.0 / 60.0
+        run_sec = frames * dwell / 60.0
 
-        frame_sec = dwell / target_fps
-        frame_ms = frame_sec * 1000.0
-        run_sec = (frames * dwell) / target_fps
-        eff_fps = target_fps / dwell
+        # Frame bytes from profile
+        frame_bytes = 0
+        if candidate in grid_profiles():
+            gp = grid_profiles()[candidate]
+            frame_bytes = int(gp.get("raw_bytes_per_frame", 0))
+        elif candidate in qr_controls():
+            qc = qr_controls()[candidate]
+            frame_bytes = int(qc.get("frame_bytes", 0))
+
+        kib_s = (frame_bytes * eff_fps) / 1024.0 if dwell > 0 else 0.0
+        run_sec_total = run_sec + 1.25  # READY + DONE per run
 
         self._campaign_speed_label.set(
-            f"Candidate speed: {frame_sec:.3f}s / frame ({frame_ms:.1f} ms, {eff_fps:.2f} FPS)  •  {run_sec:.2f}s run time"
+            f"{eff_fps:.1f} FPS • {frame_ms:.0f}ms/frame • {frame_bytes} B/frame • {kib_s:.1f} KiB/s • {run_sec_total:.0f}s"
         )
 
         if ctrl.lifecycle == CampaignLifecycle.IDLE:

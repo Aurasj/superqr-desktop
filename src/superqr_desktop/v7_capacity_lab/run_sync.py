@@ -33,7 +33,7 @@ class LabRunEnvelope:
     run_token: int
     frame_index: int
     frame_count: int
-    dwell_epochs: int
+    dwell_epochs: float
 
     def encode(self) -> bytes:
         if not 0 <= self.profile_id <= 0xFF:
@@ -44,12 +44,13 @@ class LabRunEnvelope:
             raise ValueError("frame_index must fit uint8")
         if not 1 <= self.frame_count <= 256:
             raise ValueError("frame_count must be in [1, 256]")
-        if self.dwell_epochs not in (2, 3):
-            raise ValueError("dwell_epochs must be 2 or 3")
+        dwell_byte = round(self.dwell_epochs)
+        if not 2 <= dwell_byte <= 6:
+            raise ValueError("dwell_epochs must be in [2, 6]")
         body = bytes((
             SYNC_MAGIC, SYNC_VERSION, int(self.state), self.profile_id,
             self.run_token & 0xFF, self.run_token >> 8, self.frame_index,
-            0 if self.frame_count == 256 else self.frame_count, self.dwell_epochs,
+            0 if self.frame_count == 256 else self.frame_count, dwell_byte,
         ))
         return body + bytes((crc8_atm(body),))
 

@@ -107,7 +107,7 @@ def build_run_envelope(
     run_token: int,
     frame_index: int,
     frame_count: int,
-    dwell_epochs: int,
+    dwell_epochs: float,
     state: RunState = RunState.RUNNING,
 ) -> LabRunEnvelope:
     return LabRunEnvelope(
@@ -184,7 +184,7 @@ def build_qr_control_payload(
     run_token: int = 0,
     state: RunState = RunState.RUNNING,
     frame_count: int = 256,
-    dwell_epochs: int = 3,
+    dwell_epochs: float = 3.0,
 ) -> bytes:
     frame_bytes = int(control["frame_bytes"])
     body = bytearray(frame_bytes - 4)

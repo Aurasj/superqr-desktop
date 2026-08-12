@@ -54,6 +54,7 @@ class CampaignController:
         "All canonical profiles",
         "Monochrome density sweep",
         "Full grid dwell sweep",
+        "V40 sweep",
         "V27+V40 speed test",
         "Grid density sweep",
         "V40 cadence sweep",
@@ -66,12 +67,12 @@ class CampaignController:
         "Phase 0 ShapeGrid selection",
     ]
 
-    DWELL_OPTIONS = [2, 3, 6]
+    DWELL_OPTIONS = [2, 2.5, 3, 4, 5, 6]
 
     def __init__(self):
         self._preset = "Selected profile"
         self._profile = "mono_64x50_matched"
-        self._dwell = 3
+        self._dwell = 3.0
         self._frames = 256
         self._display_index = 0
         self._fullscreen = False
@@ -104,7 +105,7 @@ class CampaignController:
         return self._profile
 
     @property
-    def dwell(self) -> int:
+    def dwell(self) -> float:
         return self._dwell
 
     @property
@@ -144,7 +145,7 @@ class CampaignController:
         if self._preset == "Selected profile":
             self._rebuild_runs()
 
-    def set_dwell(self, dwell: int) -> None:
+    def set_dwell(self, dwell: float) -> None:
         self._dwell = dwell
         self._rebuild_runs()
 
@@ -152,7 +153,7 @@ class CampaignController:
         self._frames = max(1, min(256, frames))
         self._rebuild_runs()
 
-    def start(self, *, ready_seconds: float = 0.5, done_seconds: float = 0.25) -> bool:
+    def start(self, *, ready_seconds: float = 1.0, done_seconds: float = 0.25) -> bool:
         """Begin a campaign. Returns False if no runs configured.
 
         Experimental composite families run in isolated presenters so the
@@ -205,12 +206,21 @@ class CampaignController:
         if self._lifecycle not in (CampaignLifecycle.COMPLETED, CampaignLifecycle.FAILED):
             return None
         snapshot = self.snapshot()
+        export = None
         if self._worker is not None:
+            try:
+                export = self._worker.export_payload()
+            except RuntimeError:
+                pass
             self._worker.stop()
             self._worker = None
         self._display_reclaimed = True
         self._transition(CampaignLifecycle.IDLE)
+        self._last_export = export
         return snapshot
+
+    def last_export_payload(self) -> dict | None:
+        return getattr(self, "_last_export", None)
 
     def poll(self) -> None:
         if self._lifecycle == CampaignLifecycle.IDLE:

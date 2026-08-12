@@ -29,7 +29,7 @@ class DisplayDiagnostics:
     reported_refresh_hz: float = 0.0
     timing_mode: TimingMode = TimingMode.FALLBACK_TIMER_MODE
     refresh_period_ms: float = 0.0
-    dwell_epochs: int = 2
+    dwell_epochs: float = 2.0
     expected_logical_dwell_ms: float = 0.0
     present_block_us: int = 0
     present_interval_ms: float = 0.0
@@ -85,7 +85,7 @@ class DwellState:
     every VSync to present the current surface.
     """
 
-    dwell_epochs: int
+    dwell_epochs: float
     present_refresh_hz: float = REFERENCE_REFRESH_HZ
     reference_refresh_hz: float = REFERENCE_REFRESH_HZ
     presents_for_current_frame: int = 0
@@ -149,7 +149,7 @@ class LabDisplayController:
         if bl:
             pygame.event.set_blocked(bl)
 
-    def __init__(self, dwell_epochs: int = 2):
+    def __init__(self, dwell_epochs: float = 2.0):
         self.dwell_epochs = dwell_epochs
         self.screen: pygame.Surface | None = None
         self.marker_size = 1000
@@ -357,7 +357,7 @@ class LabDisplayController:
         self._last_present_time = None
         self._dwell_start_time = time.perf_counter()
 
-    def configure_dwell(self, dwell_epochs: int) -> None:
+    def configure_dwell(self, dwell_epochs: float) -> None:
         self.dwell_epochs = dwell_epochs
         self.diag.dwell_epochs = dwell_epochs
         self.diag.expected_logical_dwell_ms = dwell_epochs * 1000.0 / REFERENCE_REFRESH_HZ

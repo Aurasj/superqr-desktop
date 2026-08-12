@@ -42,7 +42,7 @@ class CampaignState(str, Enum):
 @dataclass(frozen=True)
 class RunSpec:
     profile: str
-    dwell_epochs: int
+    dwell_epochs: float
     frame_count: int
     target_fps: float | None = None
 
@@ -51,7 +51,7 @@ class RunSpec:
 class PresentationSnapshot:
     state: CampaignState
     profile: str
-    dwell_epochs: int
+    dwell_epochs: float
     run_token: int
     run_number: int
     run_total: int
@@ -73,7 +73,7 @@ class PresentationSnapshot:
 @dataclass(frozen=True)
 class RunPresentationResult:
     profile: str
-    dwell_epochs: int
+    dwell_epochs: float
     run_token: int
     frame_count: int
     elapsed_s: float
@@ -102,8 +102,11 @@ class CampaignLaunchConfig:
     first_run_token: int
 
 
-def build_campaign(preset: str, profile: str, dwell: int, frames: int) -> list[RunSpec]:
+def build_campaign(preset: str, profile: str, dwell: float, frames: int) -> list[RunSpec]:
     all_profiles = list(grid_profiles()) + list(qr_controls())
+    if preset == "V40 sweep":
+        return [RunSpec("qr_v40_l_ceiling", round(60.0 / fps, 3), frames, target_fps=fps)
+                for fps in (30.0, 24.0, 20.0, 15.0, 12.0, 10.0)]
     if preset == "Selected profile":
         names = [profile]
     elif preset == "All canonical profiles":
@@ -115,11 +118,13 @@ def build_campaign(preset: str, profile: str, dwell: int, frames: int) -> list[R
     elif preset == "Full grid dwell sweep":
         return [RunSpec(name, epoch, frames) for epoch in (3, 2) for name in grid_profiles()]
     elif preset == "V27+V40 speed test":
+        # Canonical: dwell = 60.0 / target_fps. Works on any monitor refresh rate
+        # because DwellState normalizes to 60 Hz canonical epochs.
+        fps_targets = [30.0, 24.0, 20.0, 15.0, 12.0, 10.0]
         return [
-            RunSpec("qr_v27_l_safe", dwell, frames, target_fps=24.0),
-            RunSpec("qr_v27_l_safe", dwell, frames, target_fps=30.0),
-            RunSpec("qr_v40_l_ceiling", dwell, frames, target_fps=24.0),
-            RunSpec("qr_v40_l_ceiling", dwell, frames, target_fps=30.0),
+            RunSpec(profile, round(60.0 / fps, 3), frames, target_fps=fps)
+            for profile in ("qr_v27_l_safe", "qr_v40_l_ceiling")
+            for fps in fps_targets
         ]
     elif preset == "Grid density sweep":
         return [
@@ -174,6 +179,9 @@ class Phase1CampaignPresenter:
         self.grid_sequence: GridFrameSequence | None = None
         self.grid_matrix = None
         self.qr_native: list[pygame.Surface] = []
+        self._qr_control: dict | None = None
+        self._qr_quiet: int = 4
+        self._build_index: int = 0
         self.qr_ready: pygame.Surface | None = None
         self.qr_done: pygame.Surface | None = None
         self.error: str | None = None
@@ -209,6 +217,9 @@ class Phase1CampaignPresenter:
         self.grid_sequence = None
         self.grid_matrix = None
         self.qr_native.clear()
+        self._qr_control = None
+        self._qr_quiet = 4
+        self._build_index = 0
         self.qr_ready = None
         self.qr_done = None
         self._current_result_recorded = False
@@ -224,18 +235,17 @@ class Phase1CampaignPresenter:
             index_zero, self.grid_matrix = self.grid_sequence.next_frame()
             if index_zero != 0:
                 raise RuntimeError("grid sequence did not start at zero")
+            self.state = CampaignState.READY
+            self.state_started = time.perf_counter()
+            self._render(RunState.READY)
+            return
         else:
             control = qr_controls()[spec.profile]
             quiet = int(control["quiet_zone_modules"])
-            for frame_index in range(spec.frame_count):
-                if self._should_stop():
-                    self.state = CampaignState.STOPPED
-                    return
-                matrix = build_qr_matrix(
-                    control, frame_index, run_token=self.run_token,
-                    frame_count=spec.frame_count, dwell_epochs=spec.dwell_epochs,
-                )
-                self.qr_native.append(self.renderer.build_qr_native_surface(matrix, quiet))
+            self._qr_control = control
+            self._qr_quiet = quiet
+            self._build_index = 0
+            # Build READY + DONE immediately; data frames built incrementally in tick().
             self.qr_ready = self.renderer.build_qr_native_surface(
                 build_qr_matrix(
                     control, 0, run_token=self.run_token, state=RunState.READY,
@@ -248,9 +258,9 @@ class Phase1CampaignPresenter:
                     frame_count=spec.frame_count, dwell_epochs=spec.dwell_epochs,
                 ), quiet,
             )
-        self.state = CampaignState.READY
+        self.state = CampaignState.PREPARING
         self.state_started = time.perf_counter()
-        self._render(RunState.READY)
+        self._render(RunState.READY)  # show READY QR immediately while data frames build
 
     def _render(self, state: RunState) -> None:
         assert self.renderer is not None
@@ -291,14 +301,33 @@ class Phase1CampaignPresenter:
                 ):
                     self.stop()
                     return False
-            if self.state not in (CampaignState.READY, CampaignState.RUNNING, CampaignState.DONE):
+            if self.state not in (CampaignState.PREPARING, CampaignState.READY, CampaignState.RUNNING, CampaignState.DONE):
                 return self.state not in (CampaignState.STOPPED, CampaignState.ERROR)
             assert self.display is not None and self.renderer is not None
             surface = self.renderer.cached_frame_display
             if surface is not None:
                 self.display.present(surface)
             now = time.perf_counter()
-            if self.state == CampaignState.READY:
+            if self.state == CampaignState.PREPARING:
+                # Build QR frames incrementally so snapshots reach the UI.
+                ctrl = self._qr_control
+                if ctrl is not None and self._build_index < self.spec.frame_count:
+                    for _ in range(8):
+                        idx = self._build_index
+                        if idx >= self.spec.frame_count or self._should_stop():
+                            break
+                        matrix = build_qr_matrix(
+                            ctrl, idx, run_token=self.run_token,
+                            frame_count=self.spec.frame_count, dwell_epochs=self.spec.dwell_epochs,
+                        )
+                        self.qr_native.append(self.renderer.build_qr_native_surface(matrix, self._qr_quiet))
+                        self._build_index = idx + 1
+                    if self._build_index >= self.spec.frame_count:
+                        self._qr_control = None
+                        self.state = CampaignState.READY
+                        self.state_started = now
+                        self._render(RunState.READY)
+            elif self.state == CampaignState.READY:
                 if now - self.state_started >= self.ready_seconds:
                     self.state = CampaignState.RUNNING
                     self.state_started = now
@@ -337,7 +366,7 @@ class Phase1CampaignPresenter:
 
     def _should_advance(self, now: float) -> bool:
         assert self.display is not None
-        if self.spec.profile in grid_profiles() and self.display.diag.timing_mode == TimingMode.VSYNC_MODE:
+        if self.display.diag.timing_mode == TimingMode.VSYNC_MODE:
             return self.display.dwell.record_present()
         fps = (
             self.spec.target_fps
