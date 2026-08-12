@@ -1,4 +1,4 @@
-"""Production transfer controller for the selected V40-L optical mode."""
+"""Production transfer controller for the validated V40 optical modes."""
 
 from __future__ import annotations
 
@@ -14,22 +14,59 @@ class TransferLifecycle(str, Enum):
 
 
 class TransferController:
+    MODES = {
+        "Best tested — V40-L · 15 FPS": "v40_l_15fps",
+        "Faster — V40-L · 20 FPS": "v40_l_20fps",
+        "Extra ECC — V40-M · 15 FPS": "v40_m_15fps",
+        "Extra ECC faster — V40-M · 20 FPS": "v40_m_20fps",
+    }
+    DEFAULT_MODE = "Best tested — V40-L · 15 FPS"
+    MODE_NOTES = {
+        "Best tested — V40-L · 15 FPS": "Recommended • best physical result so far: 255/256 first-pass frames.",
+        "Faster — V40-L · 20 FPS": "Higher nominal speed • less temporal headroom; use when the camera holds up.",
+        "Extra ECC — V40-M · 15 FPS": "More QR error correction, but less payload per frame than V40-L.",
+        "Extra ECC faster — V40-M · 20 FPS": "More QR ECC plus 20 FPS • experimental throughput/robustness tradeoff.",
+    }
     INTERVAL_PRESETS = V7SenderSession.INTERVAL_PRESETS
-    TARGET_FPS = V7SenderSession.PRODUCTION_FPS
 
     def __init__(self):
         self._session = V7SenderSession()
         self._lifecycle = TransferLifecycle.IDLE
+        self._mode = self.DEFAULT_MODE
 
     @property
     def lifecycle(self) -> TransferLifecycle:
         return self._lifecycle
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def mode_note(self) -> str:
+        return self.MODE_NOTES[self._mode]
+
+    @property
+    def mode_options(self) -> tuple[str, ...]:
+        return tuple(self.MODES.keys())
+
+    def set_mode(self, mode: str) -> None:
+        if self._lifecycle == TransferLifecycle.PRESENTING:
+            raise RuntimeError("stop the active transfer before changing mode")
+        if mode not in self.MODES:
+            raise ValueError(f"unknown transfer mode: {mode}")
+        self._session.set_profile(self.MODES[mode])
+        self._mode = mode
 
     def select_file(self, path: str) -> None:
         self._session.prepare_transfer(path)
 
     def set_profile(self, profile: OpticalProfile | int | str) -> None:
         self._session.set_profile(profile)
+        for label, key in self.MODES.items():
+            if self._session.profile.key == key:
+                self._mode = label
+                break
 
     def set_interval(self, ms: float) -> None:
         self._session.set_interval(ms)
@@ -79,6 +116,10 @@ class TransferController:
         return self._session.interval_ms
 
     @property
+    def target_fps(self) -> float:
+        return self._session.target_fps
+
+    @property
     def current_frame_idx(self) -> int:
         return self._session.current_frame_idx
 
@@ -116,7 +157,7 @@ class TransferController:
 
     @property
     def nominal_payload_kib_s(self) -> float:
-        return self.profile.payload_size * self.TARGET_FPS / 1024.0
+        return self.profile.payload_size * self.target_fps / 1024.0
 
     def close(self) -> None:
         self.stop_presenting()
