@@ -54,6 +54,7 @@ def test_chromaqr_payload_self_identifies_and_is_deterministic():
     assert payload[31] == 1
     assert int.from_bytes(payload[32:34], "little") == CHROMA_QR_MODULE_COUNT
     assert payload[34] == 24
+    assert chromaqr_seed(17) == 0x41E56EFA
     assert chromaqr_seed(9) == chromaqr_seed(9)
     assert chromaqr_seed(9) != chromaqr_seed(10)
 
