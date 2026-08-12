@@ -3,17 +3,69 @@
 from __future__ import annotations
 
 import argparse
+import queue
+import threading
 import time
 
+import numpy as np
 import pygame
 
 from superqr_desktop.v7_capacity_lab.colorgrid8_core import (
     FPS_SWEEP,
     GRID_SWEEP,
     ColorGrid8Profile,
+    build_symbol_frame,
 )
 from superqr_desktop.v7_capacity_lab.colorgrid8_renderer import ColorGrid8Renderer
 from superqr_desktop.v7_capacity_lab.lab_display import LabDisplayController
+
+
+class _FramePrefetcher:
+    """Bounded symbol-matrix producer that keeps PRNG work off frame transitions."""
+
+    def __init__(self, profile: ColorGrid8Profile, frame_limit: int, depth: int = 6):
+        self.profile = profile
+        self.frame_limit = frame_limit
+        self.queue: queue.Queue[tuple[int, np.ndarray] | BaseException] = queue.Queue(maxsize=depth)
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="colorgrid8-prefetch", daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        frame_index = 0
+        try:
+            while not self.stop_event.is_set() and (self.frame_limit <= 0 or frame_index < self.frame_limit):
+                matrix = build_symbol_frame(self.profile, frame_index & 0xFFFF)
+                item: tuple[int, np.ndarray] | BaseException = (frame_index, matrix)
+                while not self.stop_event.is_set():
+                    try:
+                        self.queue.put(item, timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+                frame_index += 1
+        except BaseException as exc:  # propagate producer failures to the presenter
+            while not self.stop_event.is_set():
+                try:
+                    self.queue.put(exc, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+
+    def get(self, expected_index: int) -> np.ndarray:
+        item = self.queue.get()
+        if isinstance(item, BaseException):
+            raise RuntimeError("ColorGrid8 frame prefetch failed") from item
+        frame_index, matrix = item
+        if frame_index != expected_index:
+            raise RuntimeError(
+                f"ColorGrid8 prefetch desynchronized: expected {expected_index}, got {frame_index}"
+            )
+        return matrix
+
+    def close(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=1.0)
 
 
 def _parse_grid(value: str) -> tuple[int, int]:
@@ -39,8 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--calibration-seconds",
         type=float,
-        default=0.35,
-        help="seconds to show each of the 8 solid palette symbols before data; 0 disables",
+        default=1.0,
+        help="seconds to show one balanced 8-color warm-up board before data; 0 disables",
     )
     return parser
 
@@ -60,20 +112,28 @@ def run(profile: ColorGrid8Profile, *, frames: int, display_index: int, fullscre
     max_width = max(1, int(canvas_width * 0.98))
     max_height = max(1, int(canvas_height * 0.98))
 
+    # Start deterministic generation before warm-up. The queue is intentionally
+    # small: six 168x144 uint8 matrices are only ~142 KiB, while removing the
+    # Python PRNG loop from the timing-critical frame transition.
+    prefetch = _FramePrefetcher(profile, frames, depth=6)
+
     try:
         if calibration_seconds > 0:
-            for symbol in range(8):
-                surface, _ = renderer.render_calibration(
-                    symbol, profile, max_width=max_width, max_height=max_height
-                )
-                deadline = time.perf_counter() + calibration_seconds
-                while time.perf_counter() < deadline:
-                    for event in pygame.event.get():
-                        if event.type == pygame.QUIT or (
-                            event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
-                        ):
-                            return 0
-                    display.present(surface)
+            surface, warmup_geometry = renderer.render_calibration_board(
+                profile, max_width=max_width, max_height=max_height
+            )
+            print(
+                f"warmup: balanced 8-color board, cell={warmup_geometry.cell_px}px, "
+                f"duration={calibration_seconds:.2f}s"
+            )
+            deadline = time.perf_counter() + calibration_seconds
+            while time.perf_counter() < deadline:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT or (
+                        event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+                    ):
+                        return 0
+                display.present(surface)
 
         display.configure_dwell(60.0 / profile.fps)
         frame_index = 0
@@ -88,10 +148,11 @@ def run(profile: ColorGrid8Profile, *, frames: int, display_index: int, fullscre
                     return 0
 
             if surface is None:
+                symbols = prefetch.get(frame_index)
                 t0 = time.perf_counter()
-                surface, geometry = renderer.render(
+                surface, geometry = renderer.render_symbols(
                     profile,
-                    frame_index & 0xFFFF,
+                    symbols,
                     max_width=max_width,
                     max_height=max_height,
                 )
@@ -114,11 +175,13 @@ def run(profile: ColorGrid8Profile, *, frames: int, display_index: int, fullscre
                     elapsed = max(1e-9, time.perf_counter() - started)
                     print(
                         f"frame={frame_index} logical={frame_index / elapsed:.2f} fps "
-                        f"render_avg={render_ms_total / frame_index:.2f} ms "
+                        f"live_render_avg={render_ms_total / frame_index:.2f} ms "
+                        f"prefetch_q={prefetch.queue.qsize()} "
                         f"late={display.diag.late_present_count}"
                     )
         return 0
     finally:
+        prefetch.close()
         display.close()
         pygame.quit()
 
