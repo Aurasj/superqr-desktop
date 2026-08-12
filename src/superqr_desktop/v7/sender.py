@@ -1,9 +1,8 @@
 """Production SuperQR V7 sender session.
 
-Production transfer remains QR V40 only. The UI can select between the four
-physically tested V40-L/V40-M and 15/20 FPS combinations. File bytes are
-packaged with filename, MIME type, size, and CRC32, then split into independent
-out-of-order V7 frames.
+Production transfer remains QR V40 only. The UI can select V40-L/V40-M at
+15/20/30 FPS. The 30 FPS modes are explicit experiments; V40-L 15 FPS remains
+the default until physical transfer results justify promotion.
 """
 
 from __future__ import annotations
@@ -27,8 +26,10 @@ class V7SenderSession:
         "v40_m_15fps": 15.0,
         "v40_l_20fps": 20.0,
         "v40_m_20fps": 20.0,
+        "v40_l_30fps": 30.0,
+        "v40_m_30fps": 30.0,
     }
-    INTERVAL_PRESETS = [1000.0 / 15.0, 1000.0 / 20.0]
+    INTERVAL_PRESETS = [1000.0 / 15.0, 1000.0 / 20.0, 1000.0 / 30.0]
 
     def __init__(self):
         self.transfer_state = "IDLE"
@@ -68,7 +69,7 @@ class V7SenderSession:
     def set_profile(self, profile: OpticalProfile | int | str) -> None:
         p = get_profile(profile)
         if not p.is_qr or p.key not in self.SUPPORTED_PROFILE_FPS:
-            raise ValueError("production transfer supports only the validated V40 QR profiles")
+            raise ValueError("production transfer supports only the selectable V40 QR profiles")
         if p == self.profile:
             self.interval_ms = self._interval_for_profile(p)
             return
