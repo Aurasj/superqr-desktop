@@ -1,103 +1,82 @@
 # SuperQR Desktop
 
-SuperQR Desktop is the sender for offline screen-to-camera file transfer.
+Desktop sender for the SuperQR offline screen-to-camera data-transfer project.
 
-The product UI is **V7 only**. The physically validated V6 visual carrier remains packaged as the acquisition/debug foundation, but there is no separate V6/V7 application mode.
+The application reads a file, packages it into protocol frames and renders the optical sequence full-screen for an Android receiver to capture with its camera.
 
-## Fresh clone — Windows
+## Status
 
-Recommended prerequisite: **Python 3.11** and Git for Windows.
+SuperQR is experimental and under active development. The current user-facing sender follows the V7 development line while reusing the V6 carrier as a stable acquisition/reference layer.
+
+The reliable measurement baseline is currently 40×40 cells with a 4-color palette and 100 ms frame dwell. Denser profiles are available for testing but are not universal speed claims.
+
+## Requirements
+
+- Python 3.9+; Python 3.11 is recommended
+- Windows is the primary tested desktop environment
+
+## Setup
 
 ```powershell
 git clone https://github.com/Aurasj/superqr-desktop.git
 cd superqr-desktop
-```
-
-Create a **new virtual environment** for this checkout:
-
-```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Verify the fresh clone:
+Run the tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Run SuperQR Desktop without activating the environment:
+Run the application:
 
 ```powershell
 .\.venv\Scripts\superqr-desktop.exe
 ```
 
-Or activate it first:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-superqr-desktop
-```
-
-If PowerShell blocks activation, activation is optional; use the direct `.venv\Scripts\...` commands above.
-
-**Do not copy an old `.venv`.** It is local/generated state, is ignored by Git, and should be recreated after a fresh clone.
-
-This repository is self-contained for normal run/test/package workflows. It includes the packaged V6 contract and V7 Capacity Lab reference data; a sibling `superqr-protocol` checkout is optional for development cross-validation only.
-
-## Current V7 baseline
-
-- adaptive optical profiles (40/48/56/64+ grids, 4- and experimental 8-color palettes);
-- current reliable measurement default: **40×40 / 4 colors / 100 ms**;
-- V6-proven outer carrier, anchors, pilots and geometry;
-- profile ID announced optically so Android AUTO can follow the sender;
-- streaming file slicing instead of precomputing the full optical carousel;
-- CRC32-protected current pre-FEC transport;
-- V7.0 sender presentation telemetry with measured cadence and JSON export.
-
-Higher-density and 8-color profiles are experiments, not universal speed claims.
-
-## Run
-
-With the virtual environment active:
-
-```powershell
-superqr-desktop
-```
-
-or:
+or, with the environment activated:
 
 ```powershell
 python -m superqr_desktop.app
 ```
 
-Selecting a file starts the current transfer carousel immediately. `START / RESTART` restarts it explicitly.
+## What is implemented
 
-## Measurement terminology
+- V7 adaptive optical profiles
+- 4-color baseline with experimental higher-density profiles
+- V6-based carrier, anchors and geometry
+- optical profile identification for receiver auto-detection
+- streaming file slicing
+- CRC32-protected pre-FEC transport
+- sender timing and presentation telemetry
+- JSON metric export for physical benchmark runs
 
-The LIVE panel deliberately separates:
+## Project structure
 
-- configured/nominal logical FPS;
-- measured presentation-completion FPS;
-- theoretical raw/payload ceilings.
-
-Theoretical rate is **not** actual file goodput. Receiver-side camera FPS, analysis FPS, useful decoded FPS and completed-file goodput are separate measurements defined by the protocol V7.0 measurement contract.
-
-Use **Export metrics JSON** to save the Desktop side of a benchmark run.
-
-## Advanced carrier debug
-
-The Advanced section renders V6 carrier diagnostic patterns only. It is not a second protocol/product mode.
-
-## V6 status
-
-V6 remains frozen in protocol history as the validated compatibility/reference release. New transport, FEC, timing, compression and adaptive-PHY work belongs to V7 and later.
-
-## Tests
-
-```powershell
-python -m pytest
+```text
+src/superqr_desktop/
+  app.py              Application entry point and UI
+  contract/           Packaged protocol/visual contract
+  v6/                 Frozen carrier/reference implementation
+  v7/                 Current sender, renderer and transport
+  v7_capacity_lab/    Experimental capacity/PHY tooling
+scripts/               Contract synchronization tools
+tests/                 Unit and packaging tests
 ```
 
-CI checks out this repository from scratch, installs it, runs the test suite, builds wheel/sdist, creates a fresh virtual environment, installs the packaged wheel and verifies packaged V6/V7 resources without a sibling `superqr-protocol` checkout.
+The canonical shared protocol lives in `Aurasj/superqr-protocol`. Packaged contract files in this repository exist so the application can build and run independently.
+
+## Measurements
+
+Configured frame rate and theoretical payload capacity are not the same as real file throughput. Sender telemetry records actual presentation cadence; receiver-side camera, analysis and decoded payload rates are measured separately by the Android application.
+
+## Contributing
+
+See `CONTRIBUTING.md`.
+
+## License
+
+MIT License. See `LICENSE`.
