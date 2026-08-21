@@ -83,6 +83,7 @@ class CampaignController:
         self._worker: Phase1CampaignWorker | AdvancedCampaignWorker | ShapeGridCampaignWorker | None = None
         self._lifecycle = CampaignLifecycle.IDLE
         self._display_reclaimed = False
+        self._last_export: dict | None = None
         self._rebuild_runs()
 
     @property
@@ -210,8 +211,24 @@ class CampaignController:
         self._last_export = export
         return snapshot
 
+    def close(self) -> None:
+        """Synchronously tear down any child presenter before SDL/Pygame exits.
+
+        Normal UI stop remains non-blocking via :meth:`request_stop`; application
+        shutdown is different because the worker owns an SDL display in a child
+        process.  Leaving that process alive while the parent tears Pygame down
+        can strand an optical window on Windows or race interpreter shutdown.
+        """
+        worker = self._worker
+        if worker is not None:
+            worker.request_stop()
+            worker.stop()
+            self._worker = None
+        self._display_reclaimed = True
+        self._lifecycle = CampaignLifecycle.IDLE
+
     def last_export_payload(self) -> dict | None:
-        return getattr(self, "_last_export", None)
+        return self._last_export
 
     def poll(self) -> None:
         if self._lifecycle == CampaignLifecycle.IDLE:
