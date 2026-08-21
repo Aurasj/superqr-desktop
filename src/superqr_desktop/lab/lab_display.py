@@ -184,7 +184,13 @@ class LabDisplayController:
                 })
         return displays
 
-    def setup_display(self, display_index: int = 0, fullscreen: bool = False, marker_size: int = 1000) -> None:
+    def setup_display(
+        self,
+        display_index: int = 0,
+        fullscreen: bool = False,
+        marker_size: int = 1000,
+        window_size: tuple[int, int] | None = None,
+    ) -> None:
         self.marker_size = marker_size
         displays = self.detect_displays()
         disp_info = next((item for item in displays if item["index"] == display_index), displays[0])
@@ -194,7 +200,9 @@ class LabDisplayController:
             canvas_w, canvas_h = screen_w, screen_h
         else:
             flags = pygame.RESIZABLE
-            canvas_w = canvas_h = marker_size
+            requested_w, requested_h = window_size or (marker_size, marker_size)
+            canvas_w = max(320, min(requested_w, screen_w - 64))
+            canvas_h = max(320, min(requested_h, screen_h - 96))
 
         self.diag.requested_vsync = True
         self._apply_event_filter()

@@ -79,9 +79,10 @@ class MainWindow:
         self._video_after_id: str | None = None
 
         self._lab_progress = tk.StringVar(value="ColorGrid8 ready")
-        self._grid8_grid = tk.StringVar(value="168x144")
-        self._grid8_fps = tk.StringVar(value="30")
-        self._grid8_frames = tk.StringVar(value="256")
+        self._grid8_grid = tk.StringVar(value="336x288")
+        self._grid8_fps = tk.StringVar(value="60")
+        self._grid8_file: Path | None = None
+        self._grid8_file_label = tk.StringVar(value="No LAB transfer file selected")
         self._grid8_process: subprocess.Popen[str] | None = None
         self._grid8_output: queue.Queue[str] = queue.Queue()
 
@@ -218,7 +219,7 @@ class MainWindow:
         ).pack(anchor="w")
         ttk.Label(
             card,
-            text="The only retained custom optical PHY. Separate from production V40 transfer.",
+            text="High-speed experimental file transport. Production V40 remains separate and unchanged.",
             style="Muted.TLabel",
             wraplength=530,
         ).pack(anchor="w", pady=(0, 8))
@@ -229,17 +230,17 @@ class MainWindow:
         ttk.Combobox(
             row,
             textvariable=self._grid8_grid,
-            values=("128x96", "144x112", "160x136", "168x144", "176x144"),
+            values=("240x216", "336x288", "384x336"),
             state="readonly",
             width=13,
         ).pack(side="left")
         ttk.Label(row, text="FPS", style="Card.TLabel").pack(side="left", padx=(16, 6))
-        ttk.Combobox(row, textvariable=self._grid8_fps, values=("15", "20", "24", "30"), state="readonly", width=7).pack(side="left")
-        ttk.Label(row, text="Frames", style="Card.TLabel").pack(side="left", padx=(16, 6))
-        ttk.Spinbox(row, from_=1, to=65535, textvariable=self._grid8_frames, width=8).pack(side="left")
+        ttk.Combobox(row, textvariable=self._grid8_fps, values=("30", "45", "60", "90"), state="readonly", width=7).pack(side="left")
+        ttk.Button(card, text="SELECT FILE FOR HIGH-SPEED LAB", command=self._select_grid8_file).pack(fill="x", pady=(7, 0))
+        ttk.Label(card, textvariable=self._grid8_file_label, style="Card.TLabel", wraplength=620).pack(anchor="w", pady=(6, 0))
         ttk.Label(
             card,
-            text="Grid8 opens directly from this UI. Leave Fullscreen off for the fixed phone setup.",
+            text="Frames repeat continuously with 8+1 XOR recovery. Leave Fullscreen off for the fixed phone setup. Channel budgets are not measured speeds.",
             style="Muted.TLabel",
             wraplength=620,
         ).pack(anchor="w", pady=(5, 0))
@@ -660,6 +661,16 @@ class MainWindow:
 
     # ------------------------------------------------------------------ lab
 
+    def _select_grid8_file(self) -> None:
+        selected = filedialog.askopenfilename(title="Select file for ColorGrid8 LAB")
+        if not selected:
+            return
+        self._grid8_file = Path(selected).resolve()
+        self._grid8_file_label.set(
+            f"{self._grid8_file.name} • {self._format_bytes(self._grid8_file.stat().st_size)}"
+        )
+        self._lab_progress.set("ColorGrid8 high-speed transfer ready")
+
     def _start_lab(self) -> None:
         if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
             self._stop_transfer()
@@ -682,16 +693,13 @@ class MainWindow:
         self._lab_progress.set("ColorGrid8 is not running")
 
     def _start_grid8(self) -> None:
-        try:
-            frames = int(self._grid8_frames.get())
-            if frames < 1:
-                raise ValueError("Grid8 frame count must be at least 1")
-        except ValueError as exc:
-            self._lab_progress.set(str(exc))
+        if self._grid8_file is None or not self._grid8_file.is_file():
+            self._lab_progress.set("Select a file for the ColorGrid8 LAB transfer")
             return
         self.display.close()
         command = [
             sys.executable,
+            "-u",
             "-m",
             "superqr_desktop.lab.colorgrid8_lab_runner",
             "--grid",
@@ -699,7 +707,9 @@ class MainWindow:
             "--fps",
             self._grid8_fps.get(),
             "--frames",
-            str(frames),
+            "0",
+            "--file",
+            str(self._grid8_file),
             "--display",
             str(self._selected_display_index()),
             "--calibration-seconds",
@@ -725,7 +735,7 @@ class MainWindow:
             ).start()
             mode = "fullscreen" if self._fullscreen.get() else "windowed"
             self._lab_progress.set(
-                f"Grid8 starting • {self._grid8_grid.get()} • {self._grid8_fps.get()} FPS • {mode}"
+                f"Grid8 sending {self._grid8_file.name} • {self._grid8_grid.get()} • {self._grid8_fps.get()} FPS • {mode}"
             )
             self._status.set("Grid8 LAB owns the optical display")
         except Exception as exc:
@@ -788,7 +798,7 @@ class MainWindow:
         else:
             self._lab_panel.pack(fill="x")
             self._btn_lab_mode.configure(style="Accent.TButton")
-            self._start_btn.configure(text="START TEST")
+            self._start_btn.configure(text="START LAB TRANSFER")
 
     def _start_current(self) -> None:
         if self._mode.get() == "SEND":

@@ -7,13 +7,16 @@ lives under ``lab`` and has no imports from production V7.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 
 BITS_PER_CELL = 3
 CHROMA_BITS = 2
 HEADER_MAGIC = 0xC8D
-HEADER_VERSION = 1
+DIAGNOSTIC_HEADER_VERSION = 1
+TRANSFER_HEADER_VERSION = 2
+HEADER_VERSION = DIAGNOSTIC_HEADER_VERSION
 HEADER_PAYLOAD_BITS = 51
 HEADER_CRC_BITS = 5
 HEADER_BITS = 56
@@ -23,10 +26,15 @@ HEADER_ROWS = 2
 PILOT_PERIOD = 25
 DEFAULT_SEED = 0x4D3A
 GOLDEN_STEP = 0x9E3779B1
-GRID_SWEEP = ((128, 96), (144, 112), (160, 136), (168, 144), (176, 144))
+DIAGNOSTIC_GRIDS = ((128, 96), (144, 112), (160, 136), (168, 144), (176, 144))
+TRANSFER_GRIDS = ((240, 216), (336, 288), (384, 336))
+GRID_SWEEP = DIAGNOSTIC_GRIDS
+ALL_GRIDS = DIAGNOSTIC_GRIDS + TRANSFER_GRIDS
 FPS_SWEEP = (15, 20, 24, 30)
-PROFILE_IDS = {dims: index for index, dims in enumerate(GRID_SWEEP)}
+TRANSFER_FPS_SWEEP = (30, 45, 60, 90)
+PROFILE_IDS = {dims: index for index, dims in enumerate(ALL_GRIDS)}
 FPS_CODES = {fps: index for index, fps in enumerate(FPS_SWEEP)}
+TRANSFER_FPS_CODES = {fps: index for index, fps in enumerate(TRANSFER_FPS_SWEEP)}
 
 PALETTE_RGB = np.asarray(
     [
@@ -49,11 +57,20 @@ class ColorGrid8Profile:
     rows: int = 144
     fps: int = 30
     seed: int = DEFAULT_SEED
+    version: int = DIAGNOSTIC_HEADER_VERSION
 
     def __post_init__(self) -> None:
         if (self.cols, self.rows) not in PROFILE_IDS:
             raise ValueError(f"unsupported ColorGrid8 grid: {self.cols}x{self.rows}")
-        if self.fps not in FPS_CODES:
+        fps_codes = FPS_CODES if self.version == DIAGNOSTIC_HEADER_VERSION else TRANSFER_FPS_CODES
+        grids = DIAGNOSTIC_GRIDS if self.version == DIAGNOSTIC_HEADER_VERSION else TRANSFER_GRIDS
+        if self.version not in (DIAGNOSTIC_HEADER_VERSION, TRANSFER_HEADER_VERSION):
+            raise ValueError(f"unsupported ColorGrid8 version: {self.version}")
+        if (self.cols, self.rows) not in grids:
+            raise ValueError(
+                f"grid {self.cols}x{self.rows} is not valid for ColorGrid8 v{self.version}"
+            )
+        if self.fps not in fps_codes:
             raise ValueError(f"unsupported ColorGrid8 FPS: {self.fps}")
         if self.cols < HEADER_CELLS:
             raise ValueError("grid is too narrow for the repeated header")
@@ -92,6 +109,10 @@ class ColorGrid8Profile:
     def post_fec_kib_s(self, fec_fraction: float = 0.20) -> float:
         return self.payload_kib_s * (1.0 - fec_fraction)
 
+    @property
+    def byte_capacity(self) -> int:
+        return self.payload_cells * BITS_PER_CELL // 8
+
 
 def _crc5(bits: list[int]) -> int:
     reg = 0x1F
@@ -111,9 +132,10 @@ def _append_bits(out: list[int], value: int, width: int) -> None:
 def header_bits(profile: ColorGrid8Profile, frame_index: int) -> list[int]:
     bits: list[int] = []
     _append_bits(bits, HEADER_MAGIC, 12)
-    _append_bits(bits, HEADER_VERSION, 2)
+    _append_bits(bits, profile.version, 2)
     _append_bits(bits, profile.profile_id, 3)
-    _append_bits(bits, FPS_CODES[profile.fps], 2)
+    fps_codes = FPS_CODES if profile.version == DIAGNOSTIC_HEADER_VERSION else TRANSFER_FPS_CODES
+    _append_bits(bits, fps_codes[profile.fps], 2)
     _append_bits(bits, frame_index & 0xFFFF, 16)
     _append_bits(bits, profile.seed, 16)
     if len(bits) != HEADER_PAYLOAD_BITS:
@@ -178,6 +200,46 @@ def build_symbol_frame(profile: ColorGrid8Profile, frame_index: int) -> np.ndarr
             else:
                 matrix[row, col] = prng.next() & 7
     return matrix
+
+
+def build_payload_symbol_frame(
+    profile: ColorGrid8Profile,
+    frame_index: int,
+    payload_symbols: np.ndarray,
+) -> np.ndarray:
+    """Build a v2 frame from already packed 3-bit payload symbols.
+
+    Header and pilot placement stays identical to v1.  The caller supplies only
+    non-pilot symbols in row-major order, keeping transport framing independent
+    from rendering and from the production V40 implementation.
+    """
+    if profile.version != TRANSFER_HEADER_VERSION:
+        raise ValueError("arbitrary payload symbols require ColorGrid8 transfer v2")
+    flat_payload = np.asarray(payload_symbols, dtype=np.uint8).reshape(-1)
+    if flat_payload.size > profile.payload_cells:
+        raise ValueError("payload symbol count exceeds profile capacity")
+    if flat_payload.size and int(flat_payload.max()) > 7:
+        raise ValueError("ColorGrid8 symbols must be in [0, 7]")
+
+    matrix = np.zeros((profile.rows, profile.cols), dtype=np.uint8)
+    header = header_symbols(profile, frame_index)
+    matrix[:HEADER_ROWS, :] = header
+    payload_positions, pilot_positions, pilot_ordinals = _payload_layout(profile.cols, profile.rows)
+    flat_matrix = matrix.reshape(-1)
+    flat_matrix[pilot_positions] = (pilot_ordinals + frame_index) & 7
+    flat_matrix[payload_positions[: flat_payload.size]] = flat_payload
+    return matrix
+
+
+@lru_cache(maxsize=16)
+def _payload_layout(cols: int, rows: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    usable = np.arange((rows - HEADER_ROWS) * cols, dtype=np.int64)
+    pilot_mask = usable % PILOT_PERIOD == 0
+    offset = HEADER_ROWS * cols
+    pilot_positions = usable[pilot_mask] + offset
+    payload_positions = usable[~pilot_mask] + offset
+    pilot_ordinals = np.arange(pilot_positions.size, dtype=np.uint32)
+    return payload_positions, pilot_positions, pilot_ordinals
 
 
 def rgb_frame(profile: ColorGrid8Profile, frame_index: int) -> np.ndarray:

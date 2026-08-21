@@ -22,11 +22,13 @@ Do not copy a virtual environment between checkouts.
 
 ## ColorGrid8 LAB
 
-ColorGrid8 can be launched from the main LAB area or directly:
+ColorGrid8 high-speed file transfer can be launched from the main LAB area or directly:
 
-    superqr-colorgrid8-lab --grid 168x144 --fps 30 --frames 256 --windowed
+    superqr-colorgrid8-lab --grid 336x288 --fps 60 --frames 0 --file C:\path\to\file.bin --windowed
 
-The sender reports measured presentation FPS and render cost. Capacity values printed by the LAB are estimates, not completed-file goodput. Use windowed mode for the fixed-phone setup.
+`--frames 0` repeats continuously. The sender uses an 8-data + 1-XOR-parity carousel and bounded prefetching. It reports measured presentation FPS and render cost; printed channel budgets are estimates, not completed-file goodput. Use windowed mode for the fixed-phone setup.
+
+The original v1 deterministic diagnostic carrier remains available from the same command by omitting `--file` and selecting a v1 grid/FPS.
 
 ## Verification
 
