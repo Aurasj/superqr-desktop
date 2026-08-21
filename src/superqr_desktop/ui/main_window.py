@@ -212,6 +212,8 @@ class MainWindow:
     # -------------------------------------------------------------- display
 
     def _selected_display_index(self) -> int:
+        if not self.detected_displays:
+            raise RuntimeError("no display detected")
         label = self._selected_display.get()
         item = next((d for d in self.detected_displays if d["label"] == label), self.detected_displays[0])
         return int(item["index"])
@@ -282,6 +284,9 @@ class MainWindow:
             return
         if self.display.screen is None:
             self._apply_display()
+        if self.display.screen is None:
+            self._status.set("Transfer cannot start until an output display is available")
+            return
         if not self.transfer_ctrl.start_presenting():
             return
         assert self.transfer_ctrl.session_id is not None
@@ -385,7 +390,11 @@ class MainWindow:
         if self.campaign_ctrl.lifecycle != CampaignLifecycle.IDLE:
             return
         self._lab_changed()
-        self.campaign_ctrl.set_display(self._selected_display_index(), self._fullscreen.get(), MARKER_SIZE)
+        try:
+            self.campaign_ctrl.set_display(self._selected_display_index(), self._fullscreen.get(), MARKER_SIZE)
+        except Exception as exc:
+            self._lab_progress.set(f"Display error: {exc}")
+            return
         self.display.close()
         try:
             if self.campaign_ctrl.start():
@@ -487,8 +496,9 @@ class MainWindow:
 
     def close(self) -> None:
         self._stop_transfer()
-        if self.campaign_ctrl.lifecycle != CampaignLifecycle.IDLE:
-            self.campaign_ctrl.request_stop()
+        # LAB presenters own SDL in a child process. Tear that process down before
+        # the parent closes its display and calls pygame.quit().
+        self.campaign_ctrl.close()
         self.transfer_ctrl.close()
         self.display.close()
         try:
