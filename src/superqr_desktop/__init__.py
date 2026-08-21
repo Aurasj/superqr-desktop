@@ -1,0 +1,1 @@
+"""SuperQR Desktop package."""

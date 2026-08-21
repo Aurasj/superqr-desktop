@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "superqr-desktop"
+version = "1.0.0"
+description = "SuperQR Desktop — screen-to-camera data transfer"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python>=4.10,<6",
+    "pillow>=10.0",
+    "pygame-ce>=2.4.0",
+    "segno>=1.6.6,<2",
+    "zxing-cpp>=3.0,<4",
+]
+
+[project.scripts]
+superqr-desktop = "superqr_desktop.app:main"
+superqr-colorgrid8-lab = "superqr_desktop.lab.colorgrid8_lab_runner:main"
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "pytest>=7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"superqr_desktop.contract" = ["v7_production_qr_contract.json", "v7_production_qr_vectors.json"]
+"superqr_desktop.lab" = ["colorgrid8_manifest.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
