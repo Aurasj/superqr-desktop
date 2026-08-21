@@ -26,6 +26,27 @@ ENV/
 
 # Caches and test outputs
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+
+# Local experiment output
+campaign_sender_*.json
+src/campaign_sender_*.json
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+*.bak
+
+# IDEs and OS
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
