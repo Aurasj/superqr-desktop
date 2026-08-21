@@ -1,12 +1,45 @@
 # SuperQR Desktop
 
-SuperQR Desktop is the V7 sender and Phase 1 physical-PHY test application for offline screen-to-camera transfer.
+Desktop sender and physical-layer research tools for SuperQR offline screen-to-camera transfer.
 
-The active Desktop runtime is **V7 only**. The packaged `visual_contract.json` still carries the validated V6-era carrier geometry (border, anchors, pilots and tracking layout), because V7 intentionally reuses that proven optical geometry. The old V6 sender, transport, renderer and display implementation are no longer part of the active Desktop runtime.
+`main` is the integrated branch. The user-facing application keeps the production file-transfer path separate from experimental PHY laboratories.
+
+## Production transfer
+
+The **TRANSFER** tab sends arbitrary files as a repeating V7 QR carousel. The current production profiles use QR Version 40 with either L or M error correction at 15, 20, or 30 FPS. The default mode is the conservative/best-tested V40-L 15 FPS profile.
+
+The sender:
+
+- packages file metadata and payload with the V7 transfer framing;
+- reads large files without loading the whole file into RAM;
+- prepares QR frames on a background producer thread;
+- presents frames on a monotonic cadence rather than the Tk status-poll cadence;
+- permutes later carousels while preserving frame IDs so a fixed camera/display phase does not repeatedly lose the same frame;
+- caches a complete prepared QR carousel only when it fits a strict 64 MiB memory budget; larger transfers remain bounded streaming.
+
+The Android receiver decides when it has all unique frames, verifies the reconstructed file CRC, and saves the result.
+
+## PHY laboratories
+
+The **LAB** tab and dedicated CLI tools are experimental measurement surfaces. They do **not** silently change the production transfer wire format.
+
+The repository contains preserved and active research for grid carriers, QR controls, ChromaQR, advanced/multi-lane candidates, Chroma4/ShapeGrid, and ColorGrid8. Treat theoretical or estimated LAB rates as research results until repeatable physical testing validates them.
+
+ColorGrid8 has its own isolated sender:
+
+```powershell
+superqr-colorgrid8-lab --grid 128x96 --fps 15 --frames 0 --display 0
+```
+
+The denser target/stress profiles can then be selected explicitly, for example:
+
+```powershell
+superqr-colorgrid8-lab --grid 168x144 --fps 30 --frames 0 --display 0
+```
 
 ## Fresh clone — Windows
 
-Recommended prerequisite: **Python 3.11** and Git for Windows.
+Recommended: **Python 3.11** and Git for Windows.
 
 ```powershell
 git clone https://github.com/Aurasj/superqr-desktop.git
@@ -17,13 +50,13 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Run without activating the environment:
+Run the desktop app without activating the environment:
 
 ```powershell
 .\.venv\Scripts\superqr-desktop.exe
 ```
 
-or activate first:
+or activate it first:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -32,45 +65,18 @@ superqr-desktop
 
 Do not copy an old `.venv`; recreate it for a fresh checkout.
 
-## Current application
+## Basic end-to-end use
 
-The main window has two modes.
+1. Start SuperQR Android on **RECEIVE**.
+2. In SuperQR Desktop, select the output display.
+3. Keep the default V40-L 15 FPS mode for the first test.
+4. Select a file.
+5. Press **START TRANSFER** and point the phone at the displayed QR stream.
+6. Let Android reach **File received ✓**, then open the saved file and compare it with the source.
 
-### TRANSFER
+After the baseline works, test 20/30 FPS and the V40-M modes separately.
 
-This is the V7 file sender.
-
-1. Select the output monitor, marker size and window/fullscreen mode.
-2. Select a V7 optical profile and frame interval.
-3. Select a file. This **prepares** the carousel and previews frame 0; it does not claim that transfer is already running.
-4. Press **START** to begin optical presentation.
-5. Press **STOP** to stop while keeping the prepared file available for restart or manual Prev/Next inspection.
-
-Active transfer presentation stays in the main process and uses the same SDL display and V7 renderer as the preview path. Frame cadence has its own monotonic deadline scheduler and is not driven by the slower Tk status-poll loop, so the 25/33/42 ms test presets are not artificially limited to 20 fps.
-
-The transfer panel separates configured/theoretical rate from measured presentation cadence. Runtime status reports actual completed presents, measured presentation FPS and late presents.
-
-The current conservative physical baseline remains the 40×40 / 4-color profile at 100 ms. Faster and denser profiles are measurement candidates, not guaranteed goodput claims.
-
-### PHASE 1 TEST
-
-This is the physical PHY campaign sender used while selecting the V7 optical layer.
-
-It supports the canonical grid candidates and QR controls, including the `TEST FRAME` path for quickly checking acquisition on a phone before starting a full campaign.
-
-Campaign presentation uses a separate process so Tk UI work cannot disturb the measurement presenter. The main SDL display is released before the campaign owns it and reclaimed after campaign completion or stop.
-
-The Phase 1 implementation remains under `v7_capacity_lab` for now because it is active measurement code, not dead legacy. It should only be renamed/reorganized after the physical campaign path is frozen.
-
-## PC camera receiver
-
-The Phase 1 camera receiver can be launched directly:
-
-```powershell
-superqr-phy-camera
-```
-
-Useful CLI paths remain available:
+## Additional LAB tools
 
 ```powershell
 superqr-phy-camera --probe
@@ -78,14 +84,10 @@ superqr-phy-camera --headless --duration 20 --output pc-receiver.jsonl
 superqr-phy-lab --list
 superqr-phy-lab --profile mono_64x50_matched --dwell 3 --frames 256
 superqr-phy-lab --profile qr_v27_l_safe --frames 256
-superqr-phy-lab --campaign all --frames 256 --marker-size 600 --fullscreen --output sender.json
+superqr-colorgrid8-lab --grid 128x96 --fps 15 --frames 0
 ```
 
-The receiver exposes the analyzed camera frame, acquisition/homography state, QR/run-sync state and receiver-side performance/error measurements. It can also export receiver JSONL/diagnostic evidence for replay.
-
-## Runtime smoke tests
-
-For workstation checks that require a real GUI/display:
+Workstation GUI/display smoke tests:
 
 ```powershell
 python scripts/phy_lab_ui_runtime_smoke.py --full-app
@@ -100,30 +102,24 @@ The camera smoke requires a physical webcam.
 ```text
 src/superqr_desktop/
   app.py
-  ui/                 main Tk shell
-  transfer/           V7 transfer controller + cadence scheduling
-  presentation/       version-neutral SDL display + V7 frame presenter
-  diagnostics/        measured sender presentation telemetry
-  campaign/           Phase 1 campaign controller
-  contract/           packaged optical/modem contracts and vectors
-  v7/                 production V7 sender/renderer/transport + dormant Phase 2 modem
-  v7_capacity_lab/    active Phase 1 PHY/camera/replay laboratory
+  ui/                 Tk application shell
+  transfer/           production transfer controller + cadence scheduling
+  presentation/       SDL output + production QR preparation/presentation
+  campaign/           LAB campaign lifecycle/controller
+  contract/           packaged shared contracts and vectors
+  v7/                 V7 transport/package/sender + preserved modem work
+  v7_capacity_lab/    experimental PHY, camera, replay, and ColorGrid8 tooling
 ```
 
-Phase 2 modem code remains present but is not being extended as part of the current Phase 1 cleanup.
+The validated V6-era visual carrier geometry remains packaged where V7 LAB/reference components intentionally reuse it. That does not mean the application exposes a V6 production mode.
 
-## Contract and reference data
-
-The repository is self-contained for normal run/test/package workflows. A sibling `superqr-protocol` checkout is optional for development cross-validation.
-
-`contract/visual_contract.json` intentionally retains `contract_version: "v6"`: it is the validated optical carrier geometry reused by V7, not evidence that the Desktop application still has a V6 product mode.
-
-Phase 1 profiles and deterministic vectors are packaged from the canonical protocol artifacts. Running the laboratory does not change the production wire format.
-
-## Tests
+## Tests and packaging
 
 ```powershell
 python -m pytest
+python -m build
 ```
 
-CI runs the tests, builds wheel/sdist, installs the wheel into a fresh virtual environment, then checks the packaged visual carrier contract, V7 reference data, deterministic vectors, application import and Phase 1 artifact availability.
+CI runs the test suite, builds wheel/sdist, installs the wheel into a clean virtual environment, and smoke-checks packaged contracts, production V7 behavior, LAB reference data, and application imports.
+
+Canonical shared protocol artifacts live in `superqr-protocol`; mirrored JSON assets in this repository should remain byte-for-byte synchronized where practical.
