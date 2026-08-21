@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from superqr_desktop.presentation.transfer import _QrFrameProducer
+from superqr_desktop.presentation.transfer import PreparedQrFrame, _QrFrameProducer
 from superqr_desktop.transfer.controller import TransferController
 from superqr_desktop.v7.profiles import DEFAULT_PROFILE
 from superqr_desktop.v7.sender import V7SenderSession
@@ -90,6 +90,51 @@ def test_later_carousels_are_bijective_and_change_frame_phase():
     assert sorted(third) == list(range(total))
     assert second != first
     assert third != second
+
+
+def test_prepared_qr_cache_reuses_first_pass_work_when_carousel_fits_budget():
+    provider_calls: list[int] = []
+    prepare_calls: list[tuple[int, int]] = []
+
+    def provider(frame_id: int) -> bytes:
+        provider_calls.append(frame_id)
+        return bytes([frame_id])
+
+    producer = _QrFrameProducer(
+        frame_provider=provider,
+        total_frames=2,
+        session_id=7,
+        profile=DEFAULT_PROFILE,
+        queue_size=1,
+        cache_budget_bytes=1024 * 1024,
+    )
+    assert producer.cache_enabled
+
+    def fake_prepare(frame_id: int, loop_index: int, _raw: bytes) -> PreparedQrFrame:
+        prepare_calls.append((frame_id, loop_index))
+        return PreparedQrFrame(frame_id, loop_index, 185, bytes([frame_id + 1]) * 8)
+
+    producer._prepare = fake_prepare  # type: ignore[method-assign]
+    first = producer._prepared_for(1, 0)
+    later = producer._prepared_for(1, 4)
+
+    assert provider_calls == [1]
+    assert prepare_calls == [(1, 0)]
+    assert first.rgb is later.rgb
+    assert later.frame_id == 1
+    assert later.loop_index == 4
+
+
+def test_prepared_qr_cache_stays_disabled_when_full_working_set_exceeds_budget():
+    producer = _QrFrameProducer(
+        frame_provider=lambda _idx: b"",
+        total_frames=256,
+        session_id=7,
+        profile=DEFAULT_PROFILE,
+        queue_size=1,
+        cache_budget_bytes=1,
+    )
+    assert not producer.cache_enabled
 
 
 def test_selected_mode_has_expected_nominal_payload_rate():
