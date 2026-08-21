@@ -2,39 +2,52 @@ name: CI
 
 on:
   push:
-    branches: [ main, rebuild/v7 ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, rebuild/v7 ]
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-and-package:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build "." ".[dev]"
+          python -m pip install build ".[dev]"
+
+      - name: Compile Python sources
+        run: |
+          python -m compileall -q src tests scripts
 
       - name: Run pytest
         run: |
-          pytest
+          python -m pytest
 
       - name: Build wheel and sdist
         run: |
           python -m build
 
-      - name: Smoke test packaged wheel (visual carrier + V7)
+      - name: Smoke test packaged wheel (production + LAB assets)
         run: |
           python -m venv fresh_env
           source fresh_env/bin/activate
-          pip install dist/*.whl
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
           python -c "
           # 1. Packaged validated visual carrier contract
           from superqr_desktop.contract.loader import load_contract
@@ -46,58 +59,59 @@ jobs:
           from superqr_desktop.v7_capacity_lab.protocol_bridge import load_reference_vectors
           vectors = load_reference_vectors()
           entries = vectors['vectors']
+          assert len(entries) == 14, f'expected 14 profiles, got {len(entries)}'
           print(f'2. V7 reference vectors: {len(entries)} entries OK')
 
-          # 3. Exactly 14 canonical profiles
-          assert len(entries) == 14, f'expected 14 profiles, got {len(entries)}'
-          print('3. Entry count == 14 OK')
-
-          # 4. ref_40x40_v6_reference_4_seed42 resolves
+          # 3. Canonical reference profiles resolve
           from superqr_desktop.v7_capacity_lab.cross_validate import find_canonical_reference_profile
           c40 = find_canonical_reference_profile(40, 'v6_reference_4', 42)
-          assert c40 is not None
-          assert c40.name == 'ref_40x40_v6_reference_4_seed42'
-          print('4. ref_40x40_v6_reference_4_seed42 OK')
-
-          # 5. ref_96x96_candidate_8_a_seed42 resolves
           c96 = find_canonical_reference_profile(96, 'candidate_8_a', 42)
-          assert c96 is not None
-          assert c96.name == 'ref_96x96_candidate_8_a_seed42'
-          print('5. ref_96x96_candidate_8_a_seed42 OK')
+          assert c40 is not None and c40.name == 'ref_40x40_v6_reference_4_seed42'
+          assert c96 is not None and c96.name == 'ref_96x96_candidate_8_a_seed42'
+          print('3. Canonical profile lookup OK')
 
-          # 6. Regenerate deterministic frame and verify canonical hash
+          # 4. Regenerate deterministic reference frame
           from superqr_desktop.v7_capacity_lab._local.prng import Xorshift32
           from superqr_desktop.v7_capacity_lab._local.palettes import get_palette
           from superqr_desktop.v7_capacity_lab._local.patterns import random_fill
           from superqr_desktop.v7_capacity_lab._local.vectors import compute_symbol_hashes
           palette = get_palette('v6_reference_4')
-          prng = Xorshift32(42)
-          matrix = random_fill(prng, 40, 40, palette.name, palette.bits_per_cell)
+          matrix = random_fill(Xorshift32(42), 40, 40, palette.name, palette.bits_per_cell)
           hashes = compute_symbol_hashes(matrix)
           assert hashes['symbol_crc32'] == '8B5F63DD'
           assert hashes['symbol_sha256'] == '06b045348c4193e1be03a704889200afdf17ef12d38804684e2387b2b306f518'
-          print(f'6. Regenerated frame CRC32={hashes[\"symbol_crc32\"]} SHA256={hashes[\"symbol_sha256\"][:16]}... OK')
+          print('4. Deterministic reference frame OK')
 
-          # 7. Import app and active V7 display path
+          # 5. Active production Desktop imports
           from superqr_desktop.app import main
           from superqr_desktop.presentation.display import DisplayController
-          from superqr_desktop.v7.renderer import V7TransferRenderer
-          print('7. Active V7 Desktop imports OK')
+          from superqr_desktop.presentation.transfer import TransferPresenter
+          from superqr_desktop.transfer.controller import TransferController
+          print('5. Production Desktop imports OK')
 
-          # 8. Phase 1 PHY artifact is present in the installed wheel
+          # 6. Phase 1 artifact is packaged
           from superqr_desktop.v7_capacity_lab.protocol_bridge import load_phy_selection_manifest
           phase1 = load_phy_selection_manifest()
           assert len(phase1['grid_profiles']) == 5
           assert len(phase1['qr_controls']) == 2
-          print('8. V7 Phase 1 PHY artifact packaged OK')
+          print('6. V7 Phase 1 artifact packaged OK')
 
-          # 9. Chroma4 ShapeGrid artifact and deterministic codec survive packaging
+          # 7. Chroma4 ShapeGrid artifact/vectors survive packaging
           from superqr_desktop.v7_capacity_lab.protocol_bridge import load_shapegrid_manifest
           from superqr_desktop.v7_capacity_lab.shapegrid import validate_shapegrid_vectors
           shapegrid = load_shapegrid_manifest()
           assert [p['profile_id'] for p in shapegrid['profiles']] == [18, 19, 20]
           validate_shapegrid_vectors()
-          print('9. V7 Chroma4 ShapeGrid packaged vectors OK')
+          print('7. Chroma4 ShapeGrid packaged vectors OK')
+
+          # 8. ColorGrid8 core/entrypoint data survive packaging
+          from superqr_desktop.v7_capacity_lab.colorgrid8_core import ColorGrid8Profile, golden_crc32
+          from superqr_desktop.v7_capacity_lab.colorgrid8_lab_runner import build_parser
+          profile = ColorGrid8Profile(168, 144, 30)
+          assert golden_crc32(profile, 0) == 0xCE0A026F
+          assert profile.post_fec_kib_s(0.20) > 202.70
+          assert build_parser() is not None
+          print('8. ColorGrid8 packaged core/entrypoint OK')
 
           print()
           print('All packaged wheel smoke checks passed.')
