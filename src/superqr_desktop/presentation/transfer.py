@@ -1,8 +1,10 @@
 """Low-jitter production V40-L QR presentation.
 
-QR encoding runs in a bounded background producer.  The SDL/Tk thread only
-creates/scales a tiny 185x185 RGB surface and flips it, so QR generation time is
-not charged against the 66.67 ms optical dwell.
+QR encoding runs in a bounded background producer. The SDL/Tk thread only
+creates/scales a tiny QR RGB surface and flips it, so QR generation time is not
+charged against the optical dwell. Small/medium carousels that fit a strict
+memory budget are cached after first preparation; large transfers stay fully
+streaming and bounded.
 """
 
 from __future__ import annotations
@@ -21,6 +23,9 @@ from superqr_desktop.presentation.display import DisplayController
 from superqr_desktop.v7.profiles import OpticalProfile
 
 
+PREPARED_CAROUSEL_CACHE_BUDGET_BYTES = 64 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class PreparedQrFrame:
     frame_id: int
@@ -37,6 +42,7 @@ class _QrFrameProducer:
         session_id: int,
         profile: OpticalProfile,
         queue_size: int = 12,
+        cache_budget_bytes: int = PREPARED_CAROUSEL_CACHE_BUDGET_BYTES,
     ) -> None:
         self.frame_provider = frame_provider
         self.total_frames = total_frames
@@ -46,6 +52,18 @@ class _QrFrameProducer:
         self.stop_event = threading.Event()
         self.error: str | None = None
         self.thread = threading.Thread(target=self._run, name="superqr-v40-producer", daemon=True)
+
+        # Cache only when the complete working set fits. A partial cache would
+        # thrash on later bijective carousel permutations and waste memory while
+        # providing little deterministic benefit.
+        module_count = 17 + 4 * profile.qr_version
+        total_modules = module_count + 8  # four-module quiet zone on every side
+        estimated_frame_bytes = total_modules * total_modules * 3
+        self.cache_enabled = (
+            cache_budget_bytes > 0
+            and total_frames * estimated_frame_bytes <= cache_budget_bytes
+        )
+        self._prepared_cache: dict[int, PreparedQrFrame] = {}
 
     def start(self) -> None:
         self.thread.start()
@@ -58,6 +76,7 @@ class _QrFrameProducer:
                 self.queue.get_nowait()
             except queue.Empty:
                 break
+        self._prepared_cache.clear()
 
     def _run(self) -> None:
         try:
@@ -67,8 +86,7 @@ class _QrFrameProducer:
                     if self.stop_event.is_set():
                         return
                     frame_id = self._frame_id(position, loop_index)
-                    frame_bytes = self.frame_provider(frame_id)
-                    prepared = self._prepare(frame_id, loop_index, frame_bytes)
+                    prepared = self._prepared_for(frame_id, loop_index)
                     while not self.stop_event.is_set():
                         try:
                             self.queue.put(prepared, timeout=0.1)
@@ -78,6 +96,30 @@ class _QrFrameProducer:
                 loop_index += 1
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
+
+    def _prepared_for(self, frame_id: int, loop_index: int) -> PreparedQrFrame:
+        if self.cache_enabled:
+            cached = self._prepared_cache.get(frame_id)
+            if cached is not None:
+                return PreparedQrFrame(
+                    frame_id=frame_id,
+                    loop_index=loop_index,
+                    total_modules=cached.total_modules,
+                    rgb=cached.rgb,
+                )
+
+        frame_bytes = self.frame_provider(frame_id)
+        prepared = self._prepare(frame_id, loop_index, frame_bytes)
+        if self.cache_enabled and not self.stop_event.is_set():
+            # The RGB payload is immutable. Store one canonical copy and only
+            # replace the cheap loop metadata on later passes.
+            self._prepared_cache[frame_id] = PreparedQrFrame(
+                frame_id=frame_id,
+                loop_index=0,
+                total_modules=prepared.total_modules,
+                rgb=prepared.rgb,
+            )
+        return prepared
 
     def _frame_id(self, position: int, loop_index: int) -> int:
         """First pass is sequential; later passes permute frame/phase association.
