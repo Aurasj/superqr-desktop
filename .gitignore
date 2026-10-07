@@ -46,3 +46,6 @@ htmlcov/
 *.iml
 .DS_Store
 Thumbs.db
+
+# Generated, machine-local sender fixtures (select any file in the UI instead).
+/test_payloads/

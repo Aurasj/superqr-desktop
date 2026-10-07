@@ -5,6 +5,7 @@ import numpy as np
 from superqr_desktop.lab.colorgrid8_core import (
     TRANSFER_HEADER_VERSION,
     ColorGrid8Profile,
+    build_payload_symbol_frame,
     is_pilot,
 )
 from superqr_desktop.lab.colorgrid8_transfer import (
@@ -78,3 +79,28 @@ def test_file_session_emits_data_then_full_xor_parity(tmp_path) -> None:
         assert len(parity.payload) == session.chunk_bytes
     finally:
         session.close()
+
+
+def test_short_file_padding_is_balanced_without_changing_transport(tmp_path) -> None:
+    selected = tmp_path / "small.bin"
+    selected.write_bytes(b"small optical baseline")
+    profile = ColorGrid8Profile(240, 216, 30, version=TRANSFER_HEADER_VERSION)
+    with ColorGrid8TransferSession(selected, profile) as session:
+        raw = session._transport_bytes(KIND_DATA, 0)
+        encoded = bytes_to_symbols(raw)
+        matrix = session.symbol_frame(0)
+        cells = payload_symbols(profile, matrix)
+        np.testing.assert_array_equal(cells[:encoded.size], encoded)
+        decoded = symbols_to_bytes(cells)
+        assert decoded[:len(raw)] == raw
+        assert parse_transport_frame(profile, decoded) == parse_transport_frame(profile, raw)
+        counts = np.bincount(cells[encoded.size:], minlength=8)
+        assert counts.min() > counts.sum() * 0.10
+        assert counts.max() < counts.sum() * 0.15
+        assert session._padding_symbols.nbytes == profile.payload_cells
+        legacy = build_payload_symbol_frame(profile, 0, encoded)
+        np.testing.assert_array_equal(matrix[:2], legacy[:2])
+        for row in range(2, profile.rows):
+            for col in range(profile.cols):
+                if is_pilot(profile, row, col):
+                    assert matrix[row, col] == legacy[row, col]

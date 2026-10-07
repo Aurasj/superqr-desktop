@@ -282,6 +282,12 @@ class ColorGrid8TransferSession:
         self.group_count = (self.total_data_frames + XOR_GROUP_SIZE - 1) // XOR_GROUP_SIZE
         self.carousel_frames = self.total_data_frames + self.group_count
         self.session_id = int.from_bytes(os.urandom(4), "big") or 1
+        # Unused optical cells must not turn a short file into a mostly-green
+        # calibration scene. Padding is outside the CRC-declared transport and
+        # is ignored by receivers. One profile-sized template bounds memory.
+        self._padding_symbols = np.random.default_rng(profile.seed).integers(
+            0, 8, size=profile.payload_cells, dtype=np.uint8,
+        )
 
         channel_kib_s = self.chunk_bytes * profile.fps / 1024.0
         protected_kib_s = channel_kib_s * XOR_GROUP_SIZE / (XOR_GROUP_SIZE + 1)
@@ -341,6 +347,10 @@ class ColorGrid8TransferSession:
         kind, frame_id = self._schedule_item(logical_index)
         transport = self._transport_bytes(kind, frame_id)
         symbols = bytes_to_symbols(transport)
+        if symbols.size < self.profile.payload_cells:
+            padded = self._padding_symbols.copy()
+            padded[: symbols.size] = symbols
+            symbols = padded
         return build_payload_symbol_frame(
             self.profile,
             logical_index & 0xFFFF,

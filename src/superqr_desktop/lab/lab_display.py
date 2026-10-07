@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
+import sys
+import time
 
 import pygame
 
@@ -12,21 +13,91 @@ REFERENCE_REFRESH_HZ = 60.0
 FALLBACK_REFRESH_HZ = REFERENCE_REFRESH_HZ
 
 
+def detect_os_refresh_hz() -> float:
+    """Detect the true display refresh rate from OS platform APIs."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            class DEVMODEW(ctypes.Structure):
+                _fields_ = [
+                    ("dmDeviceName", ctypes.c_wchar * 32),
+                    ("dmSpecVersion", ctypes.wintypes.WORD),
+                    ("dmDriverVersion", ctypes.wintypes.WORD),
+                    ("dmSize", ctypes.wintypes.WORD),
+                    ("dmDriverExtra", ctypes.wintypes.WORD),
+                    ("dmFields", ctypes.wintypes.DWORD),
+                    ("dmPositionX", ctypes.c_long),
+                    ("dmPositionY", ctypes.c_long),
+                    ("dmDisplayOrientation", ctypes.wintypes.DWORD),
+                    ("dmDisplayFixedOutput", ctypes.wintypes.DWORD),
+                    ("dmColor", ctypes.c_short),
+                    ("dmDuplex", ctypes.c_short),
+                    ("dmYResolution", ctypes.c_short),
+                    ("dmTTOption", ctypes.c_short),
+                    ("dmCollate", ctypes.c_short),
+                    ("dmFormName", ctypes.c_wchar * 32),
+                    ("dmLogPixels", ctypes.wintypes.WORD),
+                    ("dmBitsPerPel", ctypes.wintypes.DWORD),
+                    ("dmPelsWidth", ctypes.wintypes.DWORD),
+                    ("dmPelsHeight", ctypes.wintypes.DWORD),
+                    ("dmDisplayFlags", ctypes.wintypes.DWORD),
+                    ("dmDisplayFrequency", ctypes.wintypes.DWORD),
+                ]
+
+            dm = DEVMODEW()
+            dm.dmSize = ctypes.sizeof(DEVMODEW)
+            if ctypes.windll.user32.EnumDisplaySettingsW(None, -1, ctypes.byref(dm)):
+                freq = float(dm.dmDisplayFrequency)
+                if freq > 0:
+                    return freq
+        except Exception:
+            pass
+
+    if pygame.display.get_init():
+        try:
+            freq = float(pygame.display.get_current_refresh_rate() or 0)
+            if freq > 0:
+                return freq
+        except Exception:
+            pass
+
+    return FALLBACK_REFRESH_HZ
+
+
 class TimingMode(Enum):
     VSYNC_MODE = auto()
     FALLBACK_TIMER_MODE = auto()
 
 
+def calculate_percentiles(values: list[float]) -> tuple[float, float]:
+    """Calculate p50 (median) and p95 from a list of duration measurements in ms."""
+    if not values:
+        return 0.0, 0.0
+    sorted_vals = sorted(values)
+    n = len(sorted_vals)
+    if n == 1:
+        return sorted_vals[0], sorted_vals[0]
+    p50_idx = int(0.50 * (n - 1))
+    p95_idx = int(0.95 * (n - 1))
+    return sorted_vals[p50_idx], sorted_vals[p95_idx]
+
+
 @dataclass
 class DisplayDiagnostics:
+    requested_fps: int = 30
     requested_vsync: bool = True
     driver_vsync_reported: bool = False
     actual_vsync_enabled: bool = False
     vsync_verified: bool = False
     reported_refresh_hz: float = 0.0
+    detected_os_refresh_hz: float = 0.0
     timing_mode: TimingMode = TimingMode.FALLBACK_TIMER_MODE
     refresh_period_ms: float = 0.0
-    dwell_epochs: float = 2.0
+    dwell_refreshes: float = 2.0
+    is_refresh_divisible: bool = True
+    timing_warning: str = ""
     expected_logical_dwell_ms: float = 0.0
     present_block_us: int = 0
     present_interval_ms: float = 0.0
@@ -37,6 +108,8 @@ class DisplayDiagnostics:
     timing_note: str = "not measured"
     _recent_intervals: list[float] = field(default_factory=list)
     _all_intervals: list[float] = field(default_factory=list)
+    _logical_frame_intervals: list[float] = field(default_factory=list)
+    _render_durations_ms: list[float] = field(default_factory=list)
     _max_recent: int = 20
 
     def record_present(self, block_us: int, interval_ms: float) -> None:
@@ -47,6 +120,15 @@ class DisplayDiagnostics:
             self._all_intervals.append(interval_ms)
         if len(self._recent_intervals) > self._max_recent:
             self._recent_intervals.pop(0)
+
+    def record_logical_frame_interval(self, duration_ms: float) -> None:
+        if duration_ms > 0:
+            self._logical_frame_intervals.append(duration_ms)
+            self.measured_logical_frame_ms = duration_ms
+
+    def record_render_duration(self, duration_ms: float) -> None:
+        if duration_ms >= 0:
+            self._render_durations_ms.append(duration_ms)
 
     def check_late(self) -> None:
         if self.refresh_period_ms > 0 and self.present_interval_ms > self.refresh_period_ms * 1.5:
@@ -63,38 +145,63 @@ class DisplayDiagnostics:
     def all_intervals(self) -> list[float]:
         return list(self._all_intervals)
 
+    @property
+    def logical_frame_intervals(self) -> list[float]:
+        return list(self._logical_frame_intervals)
+
+    @property
+    def render_durations(self) -> list[float]:
+        return list(self._render_durations_ms)
+
+    def logical_frame_percentiles(self) -> tuple[float, float]:
+        return calculate_percentiles(self._logical_frame_intervals)
+
+    def render_percentiles(self) -> tuple[float, float]:
+        return calculate_percentiles(self._render_durations_ms)
+
     def summary(self) -> str:
+        divisible_str = "divisible" if self.is_refresh_divisible else f"NOT divisible ({self.dwell_refreshes:.2f} refreshes/frame)"
         return " | ".join((
             f"VSync: {'YES' if self.actual_vsync_enabled else 'NO'}",
-            f"Refresh: {self.reported_refresh_hz:.1f} Hz" if self.reported_refresh_hz > 0 else "Refresh: unknown",
-            f"Dwell: {self.dwell_epochs} epochs",
+            f"Refresh: {self.reported_refresh_hz:.1f} Hz ({divisible_str})",
+            f"Target: {self.requested_fps} FPS",
+            f"Dwell: {self.dwell_refreshes:.2f} refreshes ({self.expected_logical_dwell_ms:.1f} ms)",
             f"Mode: {self.timing_mode.name}",
         ))
 
 
 @dataclass
 class DwellState:
-    """Count logical dwell in canonical 60 Hz reference epochs.
+    """Derive logical frame dwell directly from actual physical refresh cadence.
 
-    A high-refresh display may present the same optical frame more than once per
-    reference epoch. Fractional accumulation keeps the logical frame cadence
-    independent of the monitor's physical refresh rate while still allowing
-    every VSync to present the current surface.
+    When refresh is cleanly divisible (e.g. 60 Hz -> 30 FPS), each logical frame
+    dwells for exactly integer physical refreshes (e.g. 2 refreshes).
+    When not divisible (e.g. 72 Hz -> 30 FPS), dwell fractional accumulation
+    alternates refreshes without accumulating drift.
     """
 
-    dwell_epochs: float
+    requested_fps: int
     present_refresh_hz: float = REFERENCE_REFRESH_HZ
-    reference_refresh_hz: float = REFERENCE_REFRESH_HZ
     presents_for_current_frame: int = 0
     logical_frame_index: int = 0
-    _reference_epochs: float = 0.0
+    _accumulated_presents: float = 0.0
+
+    @property
+    def dwell_refreshes(self) -> float:
+        eff_hz = self.present_refresh_hz if self.present_refresh_hz > 0 else REFERENCE_REFRESH_HZ
+        return eff_hz / self.requested_fps
+
+    @property
+    def is_integer_dwell(self) -> bool:
+        k = self.dwell_refreshes
+        return abs(k - round(k)) < 0.001
 
     def record_present(self) -> bool:
         self.presents_for_current_frame += 1
-        present_hz = self.present_refresh_hz if self.present_refresh_hz > 0 else self.reference_refresh_hz
-        self._reference_epochs += self.reference_refresh_hz / present_hz
-        if self._reference_epochs + 1e-9 >= self.dwell_epochs:
-            self._reference_epochs = max(0.0, self._reference_epochs - self.dwell_epochs)
+        self._accumulated_presents += 1.0
+        dwell = self.dwell_refreshes
+        if self._accumulated_presents + 1e-9 >= dwell:
+            self._accumulated_presents = max(0.0, self._accumulated_presents - dwell)
             self.presents_for_current_frame = 0
             return True
         return False
@@ -109,47 +216,49 @@ class DwellState:
 class LabDisplayController:
     """Own the ColorGrid8 SDL display and presentation cadence."""
 
-    _KEPT_EVENTS = {pygame.QUIT, pygame.KEYDOWN, pygame.USEREVENT}
-    _blocklist: list[int] | None = None
-
-    @classmethod
-    def _build_blocklist(cls) -> list[int]:
-        if cls._blocklist is not None:
-            return cls._blocklist
-        blocked = []
-        for name in dir(pygame):
-            if not name.isupper() or name.startswith("_"):
-                continue
-            val = getattr(pygame, name)
-            if not isinstance(val, int) or val <= 0 or val >= 65536:
-                continue
-            if val in cls._KEPT_EVENTS:
-                continue
-            try:
-                pygame.event.set_blocked([val])
-                blocked.append(val)
-            except (ValueError, TypeError):
-                pass
-        cls._blocklist = blocked
-        return blocked
-
     @classmethod
     def _apply_event_filter(cls) -> None:
-        bl = cls._build_blocklist()
-        if bl:
-            pygame.event.set_blocked(bl)
+        # Keep expose/resize/render-reset events. Pygame's integer constants
+        # include flags and key codes too; they are not an event-type registry.
+        pygame.event.set_allowed(None)
+        pygame.event.set_blocked(pygame.MOUSEMOTION)
 
-    def __init__(self, dwell_epochs: float = 2.0):
-        self.dwell_epochs = dwell_epochs
+    def __init__(self, requested_fps: int = 30):
+        self.requested_fps = requested_fps
         self.screen: pygame.Surface | None = None
         self.marker_size = 1000
-        self.diag = DisplayDiagnostics(dwell_epochs=dwell_epochs)
-        self.dwell = DwellState(dwell_epochs=dwell_epochs)
+        detected_hz = detect_os_refresh_hz()
+        self.diag = DisplayDiagnostics(
+            requested_fps=requested_fps,
+            detected_os_refresh_hz=detected_hz,
+            reported_refresh_hz=detected_hz,
+        )
+        self.dwell = DwellState(
+            requested_fps=requested_fps,
+            present_refresh_hz=detected_hz,
+        )
         self._last_present_time: float | None = None
         self._dwell_start_time: float | None = None
-        self._last_frame_surface: pygame.Surface | None = None
         self._verification_intervals: list[float] = []
         self._next_timer_deadline: float | None = None
+        self._update_dwell_diagnostics(detected_hz)
+
+    def _update_dwell_diagnostics(self, refresh_hz: float) -> None:
+        self.dwell.present_refresh_hz = refresh_hz
+        k = refresh_hz / self.requested_fps if self.requested_fps > 0 else 2.0
+        self.diag.dwell_refreshes = k
+        self.diag.is_refresh_divisible = abs(k - round(k)) < 0.001
+        self.diag.expected_logical_dwell_ms = 1000.0 / self.requested_fps
+        if not self.diag.is_refresh_divisible:
+            low_ms = 1000.0 / refresh_hz * int(k)
+            high_ms = 1000.0 / refresh_hz * (int(k) + 1)
+            self.diag.timing_warning = (
+                f"WARNING: Detected display refresh ({refresh_hz:.1f} Hz) is not evenly divisible by "
+                f"requested {self.requested_fps} FPS (ratio={k:.2f}). Frame dwell alternates (~{low_ms:.1f}/{high_ms:.1f} ms). "
+                f"For controlled testing, switch monitor to 60 Hz in Windows Display Settings."
+            )
+        else:
+            self.diag.timing_warning = ""
 
     def detect_displays(self) -> list[dict]:
         if not pygame.display.get_init():
@@ -200,9 +309,10 @@ class LabDisplayController:
             canvas_w, canvas_h = screen_w, screen_h
         else:
             flags = pygame.RESIZABLE
-            requested_w, requested_h = window_size or (marker_size, marker_size)
-            canvas_w = max(320, min(requested_w, screen_w - 64))
-            canvas_h = max(320, min(requested_h, screen_h - 96))
+            # Use large / near-maximized window by default to maximize optical carrier area
+            requested_w, requested_h = window_size or (screen_w - 64, screen_h - 96)
+            canvas_w = max(320, min(requested_w, screen_w - 32))
+            canvas_h = max(320, min(requested_h, screen_h - 64))
 
         self.diag.requested_vsync = True
         self._apply_event_filter()
@@ -233,26 +343,23 @@ class LabDisplayController:
             self.diag.driver_vsync_reported = pygame.display.is_vsync()
         except Exception:
             self.diag.driver_vsync_reported = False
-        try:
-            self.diag.reported_refresh_hz = float(pygame.display.get_current_refresh_rate() or 0)
-        except Exception:
-            self.diag.reported_refresh_hz = 0.0
 
-        if self.diag.driver_vsync_reported and self.diag.reported_refresh_hz > 0:
+        detected_hz = detect_os_refresh_hz()
+        self.diag.detected_os_refresh_hz = detected_hz
+        self.diag.reported_refresh_hz = detected_hz
+
+        if self.diag.driver_vsync_reported and detected_hz > 0:
             self.diag.timing_mode = TimingMode.VSYNC_MODE
-            self.diag.refresh_period_ms = 1000.0 / self.diag.reported_refresh_hz
-            self.diag.timing_note = "driver reported VSync; measuring present cadence"
+            self.diag.refresh_period_ms = 1000.0 / detected_hz
+            self.diag.timing_note = f"driver reported VSync; detected {detected_hz:.1f} Hz cadence"
         else:
             self.diag.timing_mode = TimingMode.FALLBACK_TIMER_MODE
-            self.diag.reported_refresh_hz = FALLBACK_REFRESH_HZ
-            self.diag.refresh_period_ms = 1000.0 / FALLBACK_REFRESH_HZ
+            self.diag.refresh_period_ms = 1000.0 / detected_hz
             self.diag.actual_vsync_enabled = False
             self.diag.vsync_verified = False
-            self.diag.timing_note = "paced timer fallback"
-        self.dwell.present_refresh_hz = self.diag.reported_refresh_hz
-        self.diag.expected_logical_dwell_ms = (
-            self.diag.dwell_epochs * 1000.0 / REFERENCE_REFRESH_HZ
-        )
+            self.diag.timing_note = f"paced timer fallback ({detected_hz:.1f} Hz reference)"
+
+        self._update_dwell_diagnostics(detected_hz)
 
     def present(self, frame_surface: pygame.Surface) -> None:
         if self.screen is None or not pygame.display.get_init():
@@ -260,14 +367,15 @@ class LabDisplayController:
         if self.diag.timing_mode == TimingMode.FALLBACK_TIMER_MODE:
             self._pace_fallback()
         t0 = time.perf_counter_ns()
-        if frame_surface is not self._last_frame_surface:
-            canvas_w, canvas_h = self.screen.get_size()
-            frame_w, frame_h = frame_surface.get_size()
-            cx = (canvas_w - frame_w) // 2
-            cy = (canvas_h - frame_h) // 2
-            self.screen.fill((255, 255, 255))
-            self.screen.blit(frame_surface, (cx, cy))
-            self._last_frame_surface = frame_surface
+        # A reused Surface can be mutated; a window backbuffer can also be
+        # invalidated while dwelling on a static frame. Identity is not a
+        # guarantee that the visible pixels are still present.
+        canvas_w, canvas_h = self.screen.get_size()
+        frame_w, frame_h = frame_surface.get_size()
+        cx = (canvas_w - frame_w) // 2
+        cy = (canvas_h - frame_h) // 2
+        self.screen.fill((255, 255, 255))
+        self.screen.blit(frame_surface, (cx, cy))
         pygame.display.flip()
         t1 = time.perf_counter_ns()
 
@@ -282,9 +390,11 @@ class LabDisplayController:
             self.diag.check_late()
 
     def _observe_present_interval(self, interval_ms: float) -> None:
-        """Follow measured cadence only after VSync itself has been verified."""
-        if interval_ms > 0 and self.diag.vsync_verified and self.diag.actual_vsync_enabled:
-            self.dwell.present_refresh_hz = 1000.0 / interval_ms
+        """Keep dwell tied to display refresh, not individual jittery presents.
+
+        Present intervals already feed latency/loss diagnostics. Feeding them
+        back into dwell turns scheduling jitter into extra frame transitions.
+        """
 
     def _verify_vsync(self, interval_ms: float) -> None:
         if self.diag.vsync_verified or not self.diag.driver_vsync_reported or interval_ms <= 0:
@@ -298,15 +408,12 @@ class LabDisplayController:
         if period > 0 and period * 0.75 <= median <= period * 1.20:
             self.diag.actual_vsync_enabled = True
             self.diag.vsync_verified = True
-            self.diag.timing_note = f"measured VSync cadence {median:.2f} ms"
+            self.diag.timing_note = f"measured VSync cadence {median:.2f} ms ({1000.0/median:.1f} Hz)"
         else:
             self.diag.actual_vsync_enabled = False
             self.diag.vsync_verified = True
             self.diag.timing_mode = TimingMode.FALLBACK_TIMER_MODE
-            self.diag.reported_refresh_hz = FALLBACK_REFRESH_HZ
-            self.diag.refresh_period_ms = 1000.0 / FALLBACK_REFRESH_HZ
-            self.dwell.present_refresh_hz = FALLBACK_REFRESH_HZ
-            self.diag.timing_note = f"driver VSync rejected: measured {median:.2f} ms; using 60 Hz reference pacing"
+            self.diag.timing_note = f"driver VSync rejected: measured {median:.2f} ms; using timer pacing"
             self._next_timer_deadline = time.perf_counter() + self.diag.refresh_period_ms / 1000.0
 
     def _pace_fallback(self) -> None:
@@ -325,10 +432,11 @@ class LabDisplayController:
             self._next_timer_deadline = now + period
 
     def record_dwell_complete(self) -> None:
+        now = time.perf_counter()
         if self._dwell_start_time is not None:
-            now = time.perf_counter()
-            self.diag.measured_logical_frame_ms = (now - self._dwell_start_time) * 1000.0
-        self._dwell_start_time = time.perf_counter()
+            duration_ms = (now - self._dwell_start_time) * 1000.0
+            self.diag.record_logical_frame_interval(duration_ms)
+        self._dwell_start_time = now
 
     def is_vsync_mode(self) -> bool:
         return self.diag.timing_mode == TimingMode.VSYNC_MODE
@@ -345,29 +453,30 @@ class LabDisplayController:
         self.diag.estimated_skipped_refreshes = 0
         self.diag._recent_intervals.clear()
         self.diag._all_intervals.clear()
+        self.diag._logical_frame_intervals.clear()
+        self.diag._render_durations_ms.clear()
         self.diag.vsync_verified = False
         self._verification_intervals.clear()
         if self.diag.timing_mode == TimingMode.FALLBACK_TIMER_MODE and self.diag.driver_vsync_reported:
             self.diag.timing_mode = TimingMode.VSYNC_MODE
             self.diag.timing_note = "re-measuring VSync after PREPARING"
         self.dwell = DwellState(
-            dwell_epochs=self.dwell_epochs,
+            requested_fps=self.requested_fps,
             present_refresh_hz=self.diag.reported_refresh_hz or REFERENCE_REFRESH_HZ,
         )
         self._last_present_time = None
         self._dwell_start_time = time.perf_counter()
 
-    def configure_dwell(self, dwell_epochs: float) -> None:
-        self.dwell_epochs = dwell_epochs
-        self.diag.dwell_epochs = dwell_epochs
-        self.diag.expected_logical_dwell_ms = dwell_epochs * 1000.0 / REFERENCE_REFRESH_HZ
+    def configure_dwell(self, requested_fps: int) -> None:
+        self.requested_fps = requested_fps
+        self.diag.requested_fps = requested_fps
+        self._update_dwell_diagnostics(self.diag.reported_refresh_hz or REFERENCE_REFRESH_HZ)
         self.reset_measurement()
 
     def close(self) -> None:
         self.screen = None
         self._last_present_time = None
         self._dwell_start_time = None
-        self._last_frame_surface = None
         self._next_timer_deadline = None
         if pygame.display.get_init():
             pygame.display.quit()

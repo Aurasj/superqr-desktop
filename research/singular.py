@@ -1,0 +1,42 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "superqr-protocol"))
+from protocol.colorgrid8.macrochroma import (
+    gf_mul, gf_inv, gf_add, GF_EXP, GF_LOG,
+    MacrochromaTile, generate_spatial_parity_tiles, TILE_PAYLOAD_BYTES
+)
+import random
+
+k = 300
+m = 20
+
+# Test how many singular matrices occur with the current power generator
+singular_count = 0
+for trial in range(1000):
+    missing = random.sample(range(k), 10)
+    avail_p = random.sample(range(m), 10)
+    A = [[GF_EXP[((p + 1) * (idx + 1)) % 255] for idx in missing] for p in avail_p]
+
+    # Gaussian elim
+    n = len(missing)
+    singular = False
+    for i in range(n):
+        pivot = i
+        while pivot < n and A[pivot][i] == 0:
+            pivot += 1
+        if pivot == n:
+            singular = True
+            break
+        A[i], A[pivot] = A[pivot], A[i]
+        inv = gf_inv(A[i][i])
+        for j in range(i, n):
+            A[i][j] = gf_mul(A[i][j], inv)
+        for r in range(n):
+            if r != i and A[r][i] != 0:
+                f = A[r][i]
+                for j in range(i, n):
+                    A[r][j] ^= gf_mul(f, A[i][j])
+    if singular:
+        singular_count += 1
+
+print(f"Singular count in 1000 trials: {singular_count}")

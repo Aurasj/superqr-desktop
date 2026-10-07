@@ -15,12 +15,15 @@ import pygame
 from superqr_desktop.lab.colorgrid8_core import (
     FPS_SWEEP,
     ALL_GRIDS,
+    DIAGNOSTIC_GRIDS,
+    TRANSFER_GRIDS,
+    DIAGNOSTIC_HEADER_VERSION,
     TRANSFER_FPS_SWEEP,
     TRANSFER_HEADER_VERSION,
     ColorGrid8Profile,
     build_symbol_frame,
 )
-from superqr_desktop.lab.colorgrid8_renderer import ColorGrid8Renderer
+from superqr_desktop.lab.colorgrid8_renderer import ColorGrid8Renderer, ColorGrid8RenderGeometry
 from superqr_desktop.lab.colorgrid8_transfer import ColorGrid8TransferSession
 from superqr_desktop.lab.lab_display import LabDisplayController
 
@@ -108,6 +111,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def print_test_summary(
+    profile: ColorGrid8Profile,
+    display: LabDisplayController,
+    geometry: ColorGrid8RenderGeometry | None,
+    frame_index: int,
+    started_time: float,
+) -> None:
+    elapsed = max(1e-9, time.perf_counter() - started_time)
+    achieved_fps = frame_index / elapsed if frame_index > 0 else 0.0
+    log_p50, log_p95 = display.diag.logical_frame_percentiles()
+    rnd_p50, rnd_p95 = display.diag.render_percentiles()
+    late_skipped = f"{display.diag.late_present_count} late / {display.diag.estimated_skipped_refreshes} skipped"
+    cell_px = geometry.cell_px if geometry else 0
+    carrier_px = f"{geometry.carrier_width}x{geometry.carrier_height}" if geometry else "unknown"
+    finder_px = geometry.finder_size_px if geometry else 0
+    warning_str = display.diag.timing_warning if display.diag.timing_warning else "none (refresh is divisible)"
+
+    print("\n" + "=" * 40)
+    print("COLORGRID8 SENDER TEST")
+    print(f"profile: {profile.name}")
+    print(f"logical FPS: {profile.fps}")
+    print(f"detected refresh: {display.diag.reported_refresh_hz:.1f} Hz")
+    print(f"achieved logical FPS: {achieved_fps:.2f}")
+    print(f"cell px: {cell_px}")
+    print(f"carrier px: {carrier_px}")
+    print(f"finder px: {finder_px}")
+    print(f"logical frame p50: {log_p50:.2f} ms")
+    print(f"logical frame p95: {log_p95:.2f} ms")
+    print(f"late/skipped presents: {late_skipped}")
+    print(f"render p50/p95: {rnd_p50:.2f} ms / {rnd_p95:.2f} ms")
+    print(f"warning if refresh is not suitable: {warning_str}")
+    print("=" * 40 + "\n")
+
+
 def run(
     profile: ColorGrid8Profile,
     *,
@@ -119,41 +156,39 @@ def run(
 ) -> int:
     pygame.init()
     LabDisplayController._apply_event_filter()
-    display = LabDisplayController(dwell_epochs=60.0 / profile.fps)
+    display = LabDisplayController(requested_fps=profile.fps)
     display.setup_display(
         display_index=display_index,
         fullscreen=fullscreen,
-        marker_size=1000,
-        window_size=(1100, 950) if not fullscreen else None,
     )
     renderer = ColorGrid8Renderer()
 
-    # Fit against the real SDL canvas, not the monitor dimensions. This matters in
-    # --windowed mode where LabDisplayController intentionally creates a 1000px canvas.
     if display.screen is None:
         raise RuntimeError("ColorGrid8 LAB display was not created")
-    canvas_width, canvas_height = display.screen.get_size()
-    max_width = max(1, int(canvas_width * 0.98))
-    max_height = max(1, int(canvas_height * 0.98))
+    max_width, max_height = display.screen.get_size()
 
-    # A default 256-frame 168x144 run is only ~6 MiB as uint8 symbols. Let
-    # finite runs prefetch completely while the balanced warm-up is visible,
-    # keeping the Python PRNG thread out of most timing-critical presentation.
-    # Transfer mode uses a smaller fixed queue because dense v2 matrices are
-    # larger and package bytes are regenerated from disk on every carousel.
+    if display.diag.timing_warning:
+        print(f"\n[TIMING WARNING] {display.diag.timing_warning}\n")
+
     prefetch_depth = 12 if transfer is not None else (max(1, frames) if 0 < frames <= 512 else 64)
     factory = transfer.symbol_frame if transfer is not None else (
         lambda index: build_symbol_frame(profile, index & 0xFFFF)
     )
     prefetch = _FramePrefetcher(factory, frames, depth=prefetch_depth)
+    last_geometry: ColorGrid8RenderGeometry | None = None
+    frame_index = 0
+    started = time.perf_counter()
 
     try:
         if calibration_seconds > 0:
             surface, warmup_geometry = renderer.render_calibration_board(
                 profile, max_width=max_width, max_height=max_height
             )
+            last_geometry = warmup_geometry
             print(
                 f"warmup: balanced 8-color board, cell={warmup_geometry.cell_px}px, "
+                f"carrier={warmup_geometry.carrier_width}x{warmup_geometry.carrier_height}px, "
+                f"finder={warmup_geometry.finder_size_px}px, "
                 f"duration={calibration_seconds:.2f}s, prefetch_depth={prefetch_depth}"
             )
             deadline = time.perf_counter() + calibration_seconds
@@ -162,12 +197,11 @@ def run(
                     if event.type == pygame.QUIT or (
                         event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
                     ):
+                        print_test_summary(profile, display, last_geometry, 0, started)
                         return 0
                 display.present(surface)
 
-        display.configure_dwell(60.0 / profile.fps)
-        frame_index = 0
-        render_ms_total = 0.0
+        display.configure_dwell(profile.fps)
         surface = None
         started = time.perf_counter()
         while frames <= 0 or frame_index < frames:
@@ -175,6 +209,7 @@ def run(
                 if event.type == pygame.QUIT or (
                     event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
                 ):
+                    print_test_summary(profile, display, last_geometry, frame_index, started)
                     return 0
 
             if surface is None:
@@ -186,8 +221,18 @@ def run(
                     max_width=max_width,
                     max_height=max_height,
                 )
-                render_ms_total += (time.perf_counter() - t0) * 1000.0
+                render_ms = (time.perf_counter() - t0) * 1000.0
+                display.diag.record_render_duration(render_ms)
+                last_geometry = geometry
                 if frame_index == 0:
+                    print(
+                        f"geometry: cell={geometry.cell_px}px, "
+                        f"grid={geometry.grid_width}x{geometry.grid_height}px, "
+                        f"carrier={geometry.carrier_width}x{geometry.carrier_height}px, "
+                        f"margin={geometry.outer_margin_px}px, "
+                        f"finder={geometry.finder_size_px}px, "
+                        f"orientation={geometry.orientation_corner}"
+                    )
                     if transfer is None:
                         print(
                             f"{profile.name}: cell={geometry.cell_px}px, "
@@ -213,12 +258,14 @@ def run(
                 surface = None
                 if frame_index and frame_index % 30 == 0:
                     elapsed = max(1e-9, time.perf_counter() - started)
+                    r_p50, r_p95 = display.diag.render_percentiles()
                     print(
                         f"frame={frame_index} logical={frame_index / elapsed:.2f} fps "
-                        f"live_render_avg={render_ms_total / frame_index:.2f} ms "
+                        f"render_p50/p95={r_p50:.2f}/{r_p95:.2f} ms "
                         f"prefetch_q={prefetch.queue.qsize()} "
                         f"late={display.diag.late_present_count}"
                     )
+        print_test_summary(profile, display, last_geometry, frame_index, started)
         return 0
     finally:
         prefetch.close()
@@ -234,7 +281,11 @@ def main() -> int:
     fps = args.fps or (60 if args.file is not None else 30)
     if args.frames < 0:
         raise SystemExit("--frames must be >= 0 (0 means continuous)")
-    version = TRANSFER_HEADER_VERSION if args.file is not None else 1
+    version = (
+        TRANSFER_HEADER_VERSION
+        if (args.file is not None or (cols, rows) in TRANSFER_GRIDS)
+        else DIAGNOSTIC_HEADER_VERSION
+    )
     profile = ColorGrid8Profile(cols=cols, rows=rows, fps=fps, version=version)
     transfer = ColorGrid8TransferSession(args.file, profile) if args.file is not None else None
     try:

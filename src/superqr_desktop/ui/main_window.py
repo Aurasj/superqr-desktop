@@ -86,6 +86,21 @@ class MainWindow:
         self._grid8_process: subprocess.Popen[str] | None = None
         self._grid8_output: queue.Queue[str] = queue.Queue()
 
+        default_10mb = (Path(__file__).resolve().parent.parent.parent.parent / "test_payloads" / "test_10mb.bin").resolve()
+        self._colorgrid_file: Path | None = default_10mb if default_10mb.is_file() else None
+        self._colorgrid_file_label = tk.StringVar(
+            value=f"{default_10mb.name} • {self._format_bytes(default_10mb.stat().st_size)}"
+            if self._colorgrid_file is not None
+            else "No file selected"
+        )
+        self._colorgrid_file_meta = tk.StringVar(
+            value="Repeated carousel with 8+1 XOR parity • completion is verified on the receiver"
+            if self._colorgrid_file is not None
+            else "Select any file to transfer"
+        )
+        self._colorgrid_grid = tk.StringVar(value="240x216")
+        self._colorgrid_progress = tk.StringVar(value="ColorGrid8 v2 ready • 30 FPS")
+
         self._build_ui()
         self._apply_display()
         self.root.after(50, self._poll)
@@ -105,11 +120,13 @@ class MainWindow:
         row = ttk.Frame(main)
         row.pack(fill="x", pady=(0, 6))
         self._btn_send_mode = ttk.Button(row, text="SEND", style="Accent.TButton", command=lambda: self._switch_mode("SEND"))
-        self._btn_send_mode.pack(side="left", expand=True, fill="x", padx=(0, 3))
+        self._btn_send_mode.pack(side="left", expand=True, fill="x", padx=(0, 2))
         self._btn_receive_mode = ttk.Button(row, text="RECEIVE", command=lambda: self._switch_mode("RECEIVE"))
-        self._btn_receive_mode.pack(side="left", expand=True, fill="x", padx=3)
-        self._btn_lab_mode = ttk.Button(row, text="LAB / EXPERIMENTS", command=lambda: self._switch_mode("LAB"))
-        self._btn_lab_mode.pack(side="left", expand=True, fill="x", padx=(3, 0))
+        self._btn_receive_mode.pack(side="left", expand=True, fill="x", padx=2)
+        self._btn_colorgrid_mode = ttk.Button(row, text="COLORGRID", command=lambda: self._switch_mode("COLORGRID"))
+        self._btn_colorgrid_mode.pack(side="left", expand=True, fill="x", padx=2)
+        self._btn_lab_mode = ttk.Button(row, text="LAB", command=lambda: self._switch_mode("LAB"))
+        self._btn_lab_mode.pack(side="left", expand=True, fill="x", padx=(2, 0))
 
         display_card = styles.card(main, "OUTPUT — WINDOWED BY DEFAULT")
         row = ttk.Frame(display_card, style="Card.TFrame")
@@ -135,9 +152,11 @@ class MainWindow:
         self._panel_host.pack(fill="x")
         self._transfer_panel = ttk.Frame(self._panel_host)
         self._receive_panel = ttk.Frame(self._panel_host)
+        self._colorgrid_panel = ttk.Frame(self._panel_host)
         self._lab_panel = ttk.Frame(self._panel_host)
         self._build_transfer_panel()
         self._build_receive_panel()
+        self._build_colorgrid_panel()
         self._build_lab_panel()
         self._transfer_panel.pack(fill="x")
 
@@ -209,6 +228,88 @@ class MainWindow:
         ttk.Label(card, textvariable=self._file_label, style="Card.TLabel").pack(anchor="w", pady=(8, 1))
         ttk.Label(card, textvariable=self._file_meta, style="Muted.TLabel", wraplength=530).pack(anchor="w")
         ttk.Label(card, textvariable=self._transfer_progress, style="Muted.TLabel").pack(anchor="w", pady=(5, 0))
+
+
+    def _build_colorgrid_panel(self) -> None:
+        card = styles.card(self._colorgrid_panel, "COLORGRID8 HIGH-SPEED SENDER")
+        ttk.Label(
+            card,
+            text="EXPERIMENTAL FILE TRANSFER • 30 FPS",
+            style="Card.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            card,
+            text="Repeated frames with 8+1 XOR parity recovery. File completion is verified on the receiver; optical speed depends on capture conditions.",
+            style="Muted.TLabel",
+            wraplength=620,
+        ).pack(anchor="w", pady=(0, 8))
+
+        profile_row = ttk.Frame(card, style="Card.TFrame")
+        profile_row.pack(fill="x", pady=(0, 8))
+        ttk.Label(profile_row, text="Grid", style="Card.TLabel").pack(side="left", padx=(0, 8))
+        ttk.Combobox(
+            profile_row,
+            textvariable=self._colorgrid_grid,
+            values=("240x216", "336x288"),
+            state="readonly",
+            width=12,
+        ).pack(side="left")
+        ttk.Label(profile_row, text="30 FPS", style="Card.TLabel").pack(side="left", padx=8)
+        ttk.Label(
+            card,
+            text="Match the grid and FPS on Android. Stop and restart sending to apply a changed grid.",
+            style="Muted.TLabel",
+            wraplength=620,
+        ).pack(anchor="w", pady=(0, 8))
+
+        row_btns = ttk.Frame(card, style="Card.TFrame")
+        row_btns.pack(fill="x", pady=(2, 4))
+        ttk.Button(row_btns, text="CHOOSE ANY FILE…", command=self._select_colorgrid_file).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        ttk.Button(row_btns, text="USE 10 MiB TEST FILE", command=self._select_colorgrid_default_10mb).pack(side="left", expand=True, fill="x", padx=4)
+        ttk.Button(row_btns, text="USE 1 MiB TEST FILE", command=self._select_colorgrid_default_1mb).pack(side="left", expand=True, fill="x", padx=(4, 0))
+
+        ttk.Label(card, textvariable=self._colorgrid_file_label, style="Card.TLabel", wraplength=620).pack(anchor="w", pady=(6, 0))
+        ttk.Label(card, textvariable=self._colorgrid_file_meta, style="Muted.TLabel", wraplength=620).pack(anchor="w", pady=(2, 0))
+        ttk.Label(
+            card,
+            text="Frames repeat continuously with 8+1 XOR parity. For 240x216, use Android LAB / ColorGrid8 and select 240x216 at 30 FPS. Android's dedicated COLORGRID tab currently uses 336x288 at 30 FPS.",
+            style="Muted.TLabel",
+            wraplength=620,
+        ).pack(anchor="w", pady=(6, 0))
+        ttk.Label(card, textvariable=self._colorgrid_progress, style="Card.TLabel", wraplength=620).pack(anchor="w", pady=(6, 0))
+
+    def _select_colorgrid_file(self) -> None:
+        selected = filedialog.askopenfilename(title="Select file for ColorGrid8 transfer")
+        if not selected:
+            return
+        self._colorgrid_file = Path(selected).resolve()
+        self._update_colorgrid_file_display()
+
+    def _select_colorgrid_default_10mb(self) -> None:
+        path = (Path(__file__).resolve().parent.parent.parent.parent / "test_payloads" / "test_10mb.bin").resolve()
+        if path.is_file():
+            self._colorgrid_file = path
+            self._update_colorgrid_file_display()
+        else:
+            self._colorgrid_progress.set("Local test file is not available. Use CHOOSE ANY FILE instead.")
+
+    def _select_colorgrid_default_1mb(self) -> None:
+        path = (Path(__file__).resolve().parent.parent.parent.parent / "test_payloads" / "control_1mb.bin").resolve()
+        if path.is_file():
+            self._colorgrid_file = path
+            self._update_colorgrid_file_display()
+        else:
+            self._colorgrid_progress.set("Local test file is not available. Use CHOOSE ANY FILE instead.")
+
+    def _update_colorgrid_file_display(self) -> None:
+        if self._colorgrid_file is None or not self._colorgrid_file.is_file():
+            return
+        size = self._colorgrid_file.stat().st_size
+        self._colorgrid_file_label.set(f"{self._colorgrid_file.name} • {self._format_bytes(size)}")
+        self._colorgrid_file_meta.set(
+            "Repeated carousel with 8+1 XOR parity • completion is verified on the receiver"
+        )
+        self._colorgrid_progress.set("Ready to transmit • Start the Android receiver with the matching grid at 30 FPS")
 
     def _build_lab_panel(self) -> None:
         card = styles.card(self._lab_panel, "LAB / EXPERIMENTS")
@@ -671,6 +772,65 @@ class MainWindow:
         )
         self._lab_progress.set("ColorGrid8 high-speed transfer ready")
 
+
+    def _start_colorgrid(self) -> None:
+        if self._colorgrid_file is None or not self._colorgrid_file.is_file():
+            self._colorgrid_progress.set("Select a file for ColorGrid8 transfer first")
+            return
+        if self._grid8_process is not None:
+            return
+        grid = self._colorgrid_grid.get()
+        self.display.close()
+        command = [
+            sys.executable,
+            "-u",
+            "-m",
+            "superqr_desktop.lab.colorgrid8_lab_runner",
+            "--grid",
+            grid,
+            "--fps",
+            "30",
+            "--frames",
+            "0",
+            "--file",
+            str(self._colorgrid_file),
+            "--display",
+            str(self._selected_display_index()),
+            "--calibration-seconds",
+            "1.0",
+        ]
+        if not self._fullscreen.get():
+            command.append("--windowed")
+        try:
+            self._grid8_process = subprocess.Popen(
+                command,
+                cwd=os.getcwd(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            assert self._grid8_process.stdout is not None
+            threading.Thread(
+                target=self._read_grid8_output,
+                args=(self._grid8_process.stdout,),
+                name="superqr-colorgrid-ui-output",
+                daemon=True,
+            ).start()
+            mode = "fullscreen" if self._fullscreen.get() else "windowed"
+            self._colorgrid_progress.set(
+                f"ColorGrid8 transmitting {self._colorgrid_file.name} • {grid} @ 30 FPS • {mode}"
+            )
+            self._status.set("ColorGrid8 owns the optical display")
+        except Exception as exc:
+            self._grid8_process = None
+            self._colorgrid_progress.set(f"ColorGrid8 start error: {exc}")
+            self._apply_display()
+
+    def _stop_colorgrid(self) -> None:
+        self._stop_lab()
+        self._colorgrid_progress.set("ColorGrid8 stopped • ready to send again")
+
     def _start_lab(self) -> None:
         if self.transfer_ctrl.lifecycle == TransferLifecycle.PRESENTING:
             self._stop_transfer()
@@ -760,6 +920,7 @@ class MainWindow:
                 break
         if latest_grid8 is not None:
             self._lab_progress.set(latest_grid8)
+            self._colorgrid_progress.set(latest_grid8)
         if self._grid8_process is not None and self._grid8_process.poll() is not None:
             code = self._grid8_process.returncode
             self._grid8_process = None
@@ -783,9 +944,11 @@ class MainWindow:
         self._mode.set(mode)
         self._transfer_panel.pack_forget()
         self._receive_panel.pack_forget()
+        self._colorgrid_panel.pack_forget()
         self._lab_panel.pack_forget()
         self._btn_send_mode.configure(style="TButton")
         self._btn_receive_mode.configure(style="TButton")
+        self._btn_colorgrid_mode.configure(style="TButton")
         self._btn_lab_mode.configure(style="TButton")
         if mode == "SEND":
             self._transfer_panel.pack(fill="x")
@@ -795,6 +958,10 @@ class MainWindow:
             self._receive_panel.pack(fill="both", expand=True)
             self._btn_receive_mode.configure(style="Accent.TButton")
             self._start_btn.configure(text="START CAMERA")
+        elif mode == "COLORGRID":
+            self._colorgrid_panel.pack(fill="x")
+            self._btn_colorgrid_mode.configure(style="Accent.TButton")
+            self._start_btn.configure(text="START COLORGRID TRANSMISSION")
         else:
             self._lab_panel.pack(fill="x")
             self._btn_lab_mode.configure(style="Accent.TButton")
@@ -805,6 +972,8 @@ class MainWindow:
             self._start_transfer()
         elif self._mode.get() == "RECEIVE":
             self._start_receive()
+        elif self._mode.get() == "COLORGRID":
+            self._start_colorgrid()
         else:
             self._start_lab()
 
@@ -813,6 +982,8 @@ class MainWindow:
             self._stop_transfer()
         elif self._mode.get() == "RECEIVE":
             self._stop_receive()
+        elif self._mode.get() == "COLORGRID":
+            self._stop_colorgrid()
         else:
             self._stop_lab()
 
